@@ -229,4 +229,146 @@ test("the target adapter applies Combat damage and exposes each death once", fun
 	equal(records[7].SkillXP[SkillIds.Melee], 3)
 end)
 
+test("Goblin Chieftain is a stable boss definition with metadata distinguishing it from Goblin", function()
+	local valid = Definitions.Validate(Definitions.ById)
+	equal(valid, true)
+	equal(EnemyIds.ById[EnemyIds.GoblinChieftain], true)
+	local goblin = Definitions.ById[EnemyIds.Goblin]
+	local chieftain = Definitions.ById[EnemyIds.GoblinChieftain]
+	equal(chieftain.Id, EnemyIds.GoblinChieftain)
+	equal(goblin.Boss, nil)
+	assert(chieftain.Boss ~= nil)
+	equal(chieftain.Boss.IsBoss, true)
+	equal(chieftain.Boss.RewardModel, "Participation")
+	equal(chieftain.LevelRange.Minimum, 10)
+	equal(chieftain.LevelRange.Maximum, 10)
+	assert(chieftain.LevelRange.Minimum > goblin.LevelRange.Maximum)
+end)
+
+test("the Chieftain's runtime creation reuses the Enemy service and derives stronger stats than any Goblin roll", function()
+	local service = enemyFixture({ "chieftain-one" }, { 10 })
+	local chieftain = assert(service.Create(EnemyIds.GoblinChieftain))
+	equal(chieftain.DefinitionId, EnemyIds.GoblinChieftain)
+	equal(chieftain.Level, 10)
+	-- Strictly stronger than the highest possible Goblin roll (level 8: 60 health, 9 damage, 8 Gold).
+	assert(chieftain.MaxHealth > 60)
+	assert(chieftain.Damage > 9)
+	assert(chieftain.GoldReward > 8)
+	equal(chieftain.Health, chieftain.MaxHealth)
+	equal(chieftain.Alive, true)
+	local derived = assert(service.GetDerivedStats(EnemyIds.GoblinChieftain, 10))
+	equal(derived.MaxHealth, chieftain.MaxHealth)
+	local outOfRange, outOfRangeReason = service.GetDerivedStats(EnemyIds.GoblinChieftain, 11)
+	equal(outOfRange, nil)
+	equal(outOfRangeReason, "InvalidEnemyLevel")
+end)
+
+test("Chieftain damage, death, and runtime isolation reuse the same Enemy service as normal Goblins", function()
+	local service = enemyFixture({ "goblin-one", "chieftain-one" }, { 3, 10 })
+	local goblin = assert(service.Create(EnemyIds.Goblin))
+	local chieftain = assert(service.Create(EnemyIds.GoblinChieftain))
+	assert(service.ApplyDamage(goblin.RuntimeId, goblin.MaxHealth))
+	equal(assert(service.GetSnapshot(goblin.RuntimeId)).Alive, false)
+	-- Separate runtime instances: the Goblin's death never touches the boss's independent state.
+	local unaffected = assert(service.GetSnapshot(chieftain.RuntimeId))
+	equal(unaffected.Alive, true)
+	equal(unaffected.Health, chieftain.MaxHealth)
+
+	local hit = assert(service.ApplyDamage(chieftain.RuntimeId, 150))
+	equal(hit.AppliedDamage, 150)
+	equal(hit.Death, nil)
+	equal(assert(service.GetSnapshot(chieftain.RuntimeId)).Health, chieftain.MaxHealth - 150)
+
+	-- Direct ApplyDamage never queues a consumable death by itself; only the Combat target adapter
+	-- does. Route the finishing blow through that same adapter, as Combat would, on behalf of a
+	-- specific attacking user (101) -- the queued Death must still carry no attacker/owner field.
+	local resolveTarget = service.CreateCombatTargetResolver(function(_, _)
+		return 1, nil
+	end)
+	local target = assert(resolveTarget(101, chieftain.RuntimeId))
+	local appliedDamage, applyReason = target.ApplyDamage({ TargetId = chieftain.RuntimeId, Damage = 9999 })
+	equal(appliedDamage, chieftain.MaxHealth - 150)
+	equal(applyReason, nil)
+	equal(assert(service.GetSnapshot(chieftain.RuntimeId)).Alive, false)
+
+	local death = assert(service.ConsumeDeath(chieftain.RuntimeId))
+	equal(death.RuntimeId, chieftain.RuntimeId)
+	equal(death.DefinitionId, EnemyIds.GoblinChieftain)
+	equal(death.GoldReward, chieftain.GoldReward)
+
+	-- The Death record names only what died -- no field ties the reward to whichever attack landed it.
+	local deathKeys = {}
+	for key in death do
+		deathKeys[key] = true
+	end
+	equal(deathKeys.RuntimeId, true)
+	equal(deathKeys.DefinitionId, true)
+	equal(deathKeys.Level, true)
+	equal(deathKeys.FinalDamage, true)
+	equal(deathKeys.GoldReward, true)
+	equal(deathKeys.Killer, nil)
+	equal(deathKeys.KillerUserId, nil)
+	equal(deathKeys.RewardOwner, nil)
+
+	local claimedAgain, claimedAgainReason = service.ConsumeDeath(chieftain.RuntimeId)
+	equal(claimedAgain, nil)
+	equal(claimedAgainReason, "DeathNotAvailable")
+end)
+
+test("the Chieftain is attackable through the same Combat target adapter as normal enemies", function()
+	local records = {
+		[9] = {
+			Gold = 0,
+			SkillXP = {
+				[SkillIds.Melee] = 0,
+				[SkillIds.Defense] = 0,
+				[SkillIds.Mining] = 0,
+				[SkillIds.Smithing] = 0,
+			},
+			Inventory = {
+				Stacks = {},
+				Items = { upgraded = { DefinitionId = "weapon_sword_upgraded" } },
+			},
+			Equipment = { [EquipmentSlots.Weapon] = "upgraded" },
+			Plot = { Stations = {} },
+		},
+	}
+	local playerData = {}
+	function playerData.GetSnapshot(userId)
+		return if records[userId] then copy(records[userId]) else nil
+	end
+	function playerData.Update(userId, change)
+		local candidate = copy(records[userId])
+		if not candidate then
+			return false, "NotReady"
+		end
+		change(candidate)
+		records[userId] = candidate
+		return true, nil
+	end
+	local enemies = enemyFixture({ "chieftain-combat" }, { 10 })
+	local chieftain = assert(enemies.Create(EnemyIds.GoblinChieftain))
+	local equipment = Equipment.New(playerData)
+	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
+	local clock = { Now = 0 }
+	local combat = Combat.New(
+		equipment,
+		skills,
+		enemies.CreateCombatTargetResolver(function(_, target)
+			equal(target.RuntimeId, chieftain.RuntimeId)
+			return 3, nil
+		end),
+		{ MeleeXPPerSuccessfulHit = 1 },
+		function() return clock.Now end
+	)
+	local result = assert(combat.ResolveMeleeAttack(9, chieftain.RuntimeId))
+	equal(result.TargetId, chieftain.RuntimeId)
+	equal(result.AppliedDamage, 15)
+	-- Combat only reports the attack outcome; it never carries a reward or ownership claim.
+	equal(result.GoldReward, nil)
+	equal(result.RewardOwner, nil)
+	equal(assert(enemies.GetSnapshot(chieftain.RuntimeId)).Health, chieftain.MaxHealth - 15)
+	equal(records[9].SkillXP[SkillIds.Melee], 1)
+end)
+
 print(("%d Enemy checks passed"):format(passed))
