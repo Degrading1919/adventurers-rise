@@ -17,12 +17,20 @@ export type Scaling = {
 export type Aggression = {
 	read MinimumEnemyLevelDelta: number,
 }
+-- The minimum marker distinguishing shared bosses from normal enemies. RewardModel documents
+-- that boss rewards are intended to be split per eligible participant, never owned by whichever
+-- attack happens to land the killing blow; no participation/reward system is implemented yet.
+export type BossMetadata = {
+	read IsBoss: true,
+	read RewardModel: "Participation",
+}
 export type Definition = {
 	read Id: string,
 	read DisplayName: string,
 	read LevelRange: LevelRange,
 	read Scaling: Scaling,
 	read Aggression: Aggression,
+	read Boss: BossMetadata?,
 }
 
 local EnemyDefinitions = {}
@@ -58,19 +66,34 @@ local function aggression(minimumEnemyLevelDelta: number): Aggression
 	return table.freeze({ MinimumEnemyLevelDelta = minimumEnemyLevelDelta })
 end
 
-local function definition(id: string, displayName: string, levels: LevelRange, values: Scaling, behavior: Aggression): Definition
+local function bossMetadata(): BossMetadata
+	return table.freeze({ IsBoss = true :: true, RewardModel = "Participation" :: "Participation" })
+end
+
+local function definition(id: string, displayName: string, levels: LevelRange, values: Scaling, behavior: Aggression, boss: BossMetadata?): Definition
 	return table.freeze({
 		Id = id,
 		DisplayName = displayName,
 		LevelRange = levels,
 		Scaling = values,
 		Aggression = behavior,
+		Boss = boss,
 	})
 end
 
 -- All values are provisional. MinimumEnemyLevelDelta means enemy level minus player progression level.
+-- Goblin Chieftain is a fixed-level shared boss: stronger derived health/damage/reward than any
+-- normal Goblin roll, and it reuses the same Enemy runtime rather than a separate boss system.
 local definitions: { [string]: Definition } = {
 	[EnemyIds.Goblin] = definition(EnemyIds.Goblin, "Goblin", levelRange(3, 8), scaling(30, 6, 4, 1, 3, 1), aggression(-2)),
+	[EnemyIds.GoblinChieftain] = definition(
+		EnemyIds.GoblinChieftain,
+		"Goblin Chieftain",
+		levelRange(10, 10),
+		scaling(400, 0, 20, 0, 50, 0),
+		aggression(-8),
+		bossMetadata()
+	),
 }
 
 function EnemyDefinitions.Validate(candidateDefinitions: any): (boolean, string?)
@@ -95,6 +118,12 @@ function EnemyDefinitions.Validate(candidateDefinitions: any): (boolean, string?
 		local behavior = enemy.Aggression
 		if type(behavior) ~= "table" or not whole(behavior.MinimumEnemyLevelDelta) then
 			return false, "Enemy aggression values must be valid"
+		end
+		if enemy.Boss ~= nil then
+			local boss = enemy.Boss
+			if type(boss) ~= "table" or boss.IsBoss ~= true or boss.RewardModel ~= "Participation" then
+				return false, "Boss metadata must be valid"
+			end
 		end
 	end
 	return true, nil
