@@ -19,7 +19,9 @@ local BossDefinitions = require("BossDefinitions")
 local Bosses = require("BossService")
 
 local Chieftain = EnemyIds.GoblinChieftain
+local CommonItem = "item_iron_bar"
 local RareItem = "item_chieftain_fang"
+local ChieftainGold = EnemyDefinitions.ById[Chieftain].Scaling.BaseGoldReward
 
 local passed = 0
 local function test(name, run)
@@ -173,18 +175,53 @@ local function rawAttack(f, attackerUserId, runtimeId, damage)
 	return target.ApplyDamage({ TargetId = runtimeId, Damage = damage })
 end
 
-test("the Goblin Chieftain boss reward definition is stable and data-driven", function()
+test("the Goblin Chieftain boss reward definition is stable, data-driven, and has one Gold authority", function()
 	local valid = BossDefinitions.Validate(BossDefinitions.ById)
 	equal(valid, true)
 	local definition = BossDefinitions.ById[Chieftain]
 	equal(definition.EnemyDefinitionId, Chieftain)
 	equal(definition.Eligibility.MinimumContributionFraction, 0.05)
-	equal(definition.Loot.Common.GoldAmount, 25)
+	-- No Gold field exists in Boss loot data at all -- the Enemy definition/death record is the
+	-- single authority for Chieftain Gold.
+	equal(definition.Loot.Common.GoldAmount, nil)
+	equal(definition.Loot.Common.ItemDefinitionId, CommonItem)
+	equal(definition.Loot.Common.Amount, 1)
 	equal(definition.Loot.Rare.ItemDefinitionId, RareItem)
 	equal(definition.Loot.Rare.Amount, 1)
 	equal(definition.Loot.Rare.Chance, 0.15)
 	equal(definition.MilestoneId, ProgressionFlagIds.GoblinChieftainDefeated)
+	equal(ItemDefinitions.ById[CommonItem].Kind, "Stackable")
 	equal(ItemDefinitions.ById[RareItem].Kind, "Stackable")
+	equal(EnemyDefinitions.ById[Chieftain].Boss.IsBoss, true)
+	assert(ChieftainGold > 0)
+end)
+
+test("Boss definitions reject a reference to a normal enemy or unknown ID that isn't marked as a boss", function()
+	local template = BossDefinitions.ById[Chieftain]
+	local candidateForGoblin = {
+		[EnemyIds.Goblin] = {
+			EnemyDefinitionId = EnemyIds.Goblin,
+			Eligibility = template.Eligibility,
+			Loot = template.Loot,
+			MilestoneId = template.MilestoneId,
+		},
+	}
+	local goblinValid, goblinReason = BossDefinitions.Validate(candidateForGoblin)
+	equal(goblinValid, false)
+	assert(type(goblinReason) == "string")
+	equal(EnemyDefinitions.ById[EnemyIds.Goblin].Boss, nil)
+
+	local candidateForUnknown = {
+		enemy_unknown = {
+			EnemyDefinitionId = "enemy_unknown",
+			Eligibility = template.Eligibility,
+			Loot = template.Loot,
+			MilestoneId = template.MilestoneId,
+		},
+	}
+	local unknownValid, unknownReason = BossDefinitions.Validate(candidateForUnknown)
+	equal(unknownValid, false)
+	assert(type(unknownReason) == "string")
 end)
 
 test("multiple players contribute independently and only actual applied damage counts", function()
@@ -284,11 +321,20 @@ test("participation eligibility follows the centralized rule, not the killing bl
 	equal(result.Participants[3].Eligible, true)
 	equal(result.Participants[3].RewardGranted, true)
 
-	-- Ineligible participant 402 (the killer) never even had a PlayerData mutation attempted.
+	-- Ineligible participant 402 (the killer) never even had a PlayerData mutation attempted, and
+	-- receives no Gold, common item, rare item, or milestone.
 	equal(f.PlayerData.Calls, callsBefore + 2)
 	equal(f.Records[402].Gold, 0)
+	equal(f.Records[402].Inventory.Stacks[CommonItem], nil)
+	equal(f.Records[402].Inventory.Stacks[RareItem], nil)
 	equal(f.Records[402].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated], nil)
+
+	-- Both eligible participants receive the guaranteed Iron Bar and the Enemy-sourced Gold.
+	equal(f.Records[401].Gold, ChieftainGold)
+	equal(f.Records[401].Inventory.Stacks[CommonItem], 1)
 	equal(f.Records[401].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated], true)
+	equal(f.Records[403].Gold, ChieftainGold)
+	equal(f.Records[403].Inventory.Stacks[CommonItem], 1)
 	equal(f.Records[403].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated], true)
 end)
 
@@ -319,11 +365,14 @@ test("an eligible participant with no rare roll still receives the guaranteed re
 	local participant = result.Participants[1]
 	equal(participant.UserId, 701)
 	equal(participant.RewardGranted, true)
-	equal(participant.CommonGoldAmount, 25)
+	equal(participant.CommonGoldAmount, ChieftainGold)
+	equal(participant.CommonItemDefinitionId, CommonItem)
+	equal(participant.CommonItemAmount, 1)
 	equal(participant.RareGranted, false)
 	equal(participant.RareItemDefinitionId, nil)
 	equal(participant.MilestoneRecorded, true)
-	equal(f.Records[701].Gold, 25)
+	equal(f.Records[701].Gold, ChieftainGold)
+	equal(f.Records[701].Inventory.Stacks[CommonItem], 1)
 	equal(f.Records[701].Inventory.Stacks[RareItem], nil)
 	equal(f.Records[701].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated], true)
 end)
@@ -341,9 +390,12 @@ test("each eligible participant rolls independently for the rare reward alongsid
 	equal(result.Participants[2].RareGranted, false)
 	equal(result.Participants[2].RareItemDefinitionId, nil)
 
-	equal(f.Records[801].Gold, 25)
+	-- The guaranteed Iron Bar and Gold go to both participants regardless of their rare outcome.
+	equal(f.Records[801].Gold, ChieftainGold)
+	equal(f.Records[801].Inventory.Stacks[CommonItem], 1)
 	equal(f.Records[801].Inventory.Stacks[RareItem], 1)
-	equal(f.Records[802].Gold, 25)
+	equal(f.Records[802].Gold, ChieftainGold)
+	equal(f.Records[802].Inventory.Stacks[CommonItem], 1)
 	equal(f.Records[802].Inventory.Stacks[RareItem], nil)
 end)
 
@@ -360,8 +412,10 @@ test("a failed mutation rolls back one participant's entire reward without affec
 	equal(first.Eligible, true)
 	equal(first.RewardGranted, false)
 	equal(first.FailureReason, "SimulatedMutationFailure")
-	-- Nothing partially applied for the failed participant.
+	-- Nothing partially applied for the failed participant: Gold + common item + rare item +
+	-- milestone all failed to commit together.
 	equal(f.Records[901].Gold, 0)
+	equal(f.Records[901].Inventory.Stacks[CommonItem], nil)
 	equal(f.Records[901].Inventory.Stacks[RareItem], nil)
 	equal(f.Records[901].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated], nil)
 
@@ -369,7 +423,8 @@ test("a failed mutation rolls back one participant's entire reward without affec
 	local second = result.Participants[2]
 	equal(second.UserId, 902)
 	equal(second.RewardGranted, true)
-	equal(f.Records[902].Gold, 25)
+	equal(f.Records[902].Gold, ChieftainGold)
+	equal(f.Records[902].Inventory.Stacks[CommonItem], 1)
 	equal(f.Records[902].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated], true)
 end)
 
@@ -379,12 +434,14 @@ test("resolving the same boss death twice fails closed and never duplicates a re
 	assert(rawAttack(f, 1001, "chieftain-10", 999999))
 	local first = assert(f.Service.ResolveBossDeath("chieftain-10"))
 	equal(first.Participants[1].RewardGranted, true)
-	equal(f.Records[1001].Gold, 25)
+	equal(f.Records[1001].Gold, ChieftainGold)
+	equal(f.Records[1001].Inventory.Stacks[CommonItem], 1)
 
 	local second, secondReason = f.Service.ResolveBossDeath("chieftain-10")
 	equal(second, nil)
 	equal(secondReason, "DeathNotAvailable")
-	equal(f.Records[1001].Gold, 25)
+	equal(f.Records[1001].Gold, ChieftainGold)
+	equal(f.Records[1001].Inventory.Stacks[CommonItem], 1)
 end)
 
 print(("%d Bosses checks passed"):format(passed))

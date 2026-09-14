@@ -28,7 +28,10 @@ export type ParticipantResult = {
 	Contribution: number,
 	Eligible: boolean,
 	RewardGranted: boolean,
+	-- Sourced from the consumed Enemy death record, not from Boss loot data.
 	CommonGoldAmount: number?,
+	CommonItemDefinitionId: string?,
+	CommonItemAmount: number?,
 	RareGranted: boolean?,
 	RareItemDefinitionId: string?,
 	MilestoneRecorded: boolean?,
@@ -146,6 +149,8 @@ function Service.New(playerData: PlayerData, enemies: Enemies, economy: Economy,
 				Eligible = eligible,
 				RewardGranted = false,
 				CommonGoldAmount = nil,
+				CommonItemDefinitionId = nil,
+				CommonItemAmount = nil,
 				RareGranted = nil,
 				RareItemDefinitionId = nil,
 				MilestoneRecorded = nil,
@@ -159,9 +164,15 @@ function Service.New(playerData: PlayerData, enemies: Enemies, economy: Economy,
 					error(abortReason, 0)
 				end
 				local ok, updateReason = playerData.Update(userId, function(data)
-					local _, goldReason = economy.CreditGoldToData(data, bossDefinition.Loot.Common.GoldAmount)
+					-- Gold is the Enemy death's own GoldReward -- the single authoritative amount,
+					-- never a second Gold value duplicated in Boss loot data.
+					local _, goldReason = economy.CreditGoldToData(data, (death :: any).GoldReward)
 					if goldReason then
 						abort(goldReason)
+					end
+					local _, commonItemReason = inventory.AddStackToData(data, bossDefinition.Loot.Common.ItemDefinitionId, bossDefinition.Loot.Common.Amount)
+					if commonItemReason then
+						abort(commonItemReason)
 					end
 					if rareGranted then
 						local _, itemReason = inventory.AddStackToData(data, bossDefinition.Loot.Rare.ItemDefinitionId, bossDefinition.Loot.Rare.Amount)
@@ -176,7 +187,9 @@ function Service.New(playerData: PlayerData, enemies: Enemies, economy: Economy,
 				end)
 				if ok then
 					participant.RewardGranted = true
-					participant.CommonGoldAmount = bossDefinition.Loot.Common.GoldAmount
+					participant.CommonGoldAmount = (death :: any).GoldReward
+					participant.CommonItemDefinitionId = bossDefinition.Loot.Common.ItemDefinitionId
+					participant.CommonItemAmount = bossDefinition.Loot.Common.Amount
 					participant.RareGranted = rareGranted
 					participant.RareItemDefinitionId = if rareGranted then bossDefinition.Loot.Rare.ItemDefinitionId else nil
 					participant.MilestoneRecorded = true

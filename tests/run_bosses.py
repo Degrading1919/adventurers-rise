@@ -51,6 +51,7 @@ local scripts = {{
     SkillsService = {{ Parent = {{ Definitions = "SkillDefinitions" }} }},
     EconomyService = {{ Parent = {{ ShopCatalog = "ShopCatalog" }} }},
     AscensionService = {{ Parent = {{ Definitions = "AscensionDefinitions" }} }},
+    BossDefinitions = {{ Parent = {{ Parent = {{ Enemies = {{ Definitions = "EnemyDefinitions" }} }} }} }},
     BossService = {{ Parent = {{ Definitions = "BossDefinitions" }} }},
 }}
 local fakeGame = {{
@@ -91,6 +92,8 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.ShopCatalog)', 'require("./ShopCatalog")')
             elif name == "AscensionService":
                 source = source.replace('require(script.Parent.Definitions)', 'require("./AscensionDefinitions")')
+            elif name == "BossDefinitions":
+                source = source.replace('require(script.Parent.Parent.Enemies.Definitions)', 'require("./EnemyDefinitions")')
             elif name == "BossService":
                 source = source.replace('require(script.Parent.Definitions)', 'require("./BossDefinitions")')
             target = temporary / f"{name}.luau"
