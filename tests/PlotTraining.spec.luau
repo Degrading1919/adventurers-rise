@@ -99,6 +99,34 @@ test("fixed sockets and station definitions use stable IDs", function()
 	equal(StationDefinitions.ById[DefenseStation].SkillId, SkillIds.Defense)
 end)
 
+test("definition validation rejects gapped tiers and unknown sockets", function()
+	local gapped = {
+		station_training_test = {
+			Id = "station_training_test",
+			SocketId = PlotSockets.Melee,
+			SkillId = SkillIds.Melee,
+			Tiers = {
+				[1] = { Tier = 1, UpgradeCostGold = 0, XPPerSecond = 1 },
+				[3] = { Tier = 3, UpgradeCostGold = 100, XPPerSecond = 2 },
+			},
+		},
+	}
+	local gappedValid, gappedReason = StationDefinitions.Validate(gapped, 9007199254740991)
+	equal(gappedValid, false)
+	equal(gappedReason, "Station tiers must be consecutive positive integers")
+	local unknownSocket = {
+		station_training_test = {
+			Id = "station_training_test",
+			SocketId = "socket_unknown",
+			SkillId = SkillIds.Melee,
+			Tiers = { [1] = { Tier = 1, UpgradeCostGold = 0, XPPerSecond = 1 } },
+		},
+	}
+	local unknownSocketValid, unknownSocketReason = StationDefinitions.Validate(unknownSocket, 9007199254740991)
+	equal(unknownSocketValid, false)
+	equal(unknownSocketReason, "Stations must reference a known socket ID")
+end)
+
 test("absent saved states resolve to tier one station defaults", function()
 	local f = fixture()
 	local melee = assert(f.Service.GetStation(7, MeleeStation))

@@ -38,24 +38,8 @@ local function validTier(value: any): boolean
 end
 
 local function validateDefinitions()
-	for stationId, definition in StationDefinitions.ById do
-		assert(type(stationId) == "string" and stationId ~= "" and definition.Id == stationId, "Station IDs must be stable")
-		assert(type(definition.SocketId) == "string" and definition.SocketId ~= "", "Stations require a socket ID")
-		assert(type(definition.SkillId) == "string" and definition.SkillId ~= "", "Stations require a skill ID")
-		for tierNumber, tier in definition.Tiers do
-			assert(tierNumber == tier.Tier and validTier(tierNumber), "Station tiers must be consecutive positive integers")
-			assert(type(tier.UpgradeCostGold) == "number" and tier.UpgradeCostGold >= 0 and tier.UpgradeCostGold <= Economy.MaximumGold and tier.UpgradeCostGold % 1 == 0, "Station upgrade costs must be valid Gold")
-			assert(finitePositive(tier.XPPerSecond), "Station training rates must be finite positive values")
-		end
-		local tierNumber = 1
-		while definition.Tiers[tierNumber] do
-			tierNumber += 1
-		end
-		assert(tierNumber > 1 and definition.Tiers[1].UpgradeCostGold == 0, "Stations must define a free tier 1")
-		for requiredTier = 1, tierNumber - 1 do
-			assert(definition.Tiers[requiredTier], "Station tiers must be consecutive")
-		end
-	end
+	local valid, reason = StationDefinitions.Validate(StationDefinitions.ById, Economy.MaximumGold)
+	assert(valid, reason)
 end
 
 function Service.New(playerData: PlayerData, skills: Skills)
