@@ -113,6 +113,9 @@ test("damage clamps to health and emits one structured death transition", functi
 	equal(final.Death.DefinitionId, EnemyIds.Goblin)
 	equal(final.Death.Level, 3)
 	equal(final.Death.GoldReward, enemy.GoldReward)
+	local noHandoff, noHandoffReason = service.ConsumeDeath(enemy.RuntimeId)
+	equal(noHandoff, nil)
+	equal(noHandoffReason, "DeathNotAvailable")
 	local repeated, repeatedReason = service.ApplyDamage(enemy.RuntimeId, 1)
 	equal(repeated, nil)
 	equal(repeatedReason, "EnemyDead")
@@ -154,7 +157,7 @@ test("separate enemy runtime instances never share health or death state", funct
 	equal(unaffected.Health, unaffected.MaxHealth)
 end)
 
-test("the target adapter applies Combat's server-derived damage and awards Melee XP", function()
+test("the target adapter applies Combat damage and exposes each death once", function()
 	local records = {
 		[7] = {
 			Gold = 25,
@@ -164,7 +167,13 @@ test("the target adapter applies Combat's server-derived damage and awards Melee
 				[SkillIds.Mining] = 0,
 				[SkillIds.Smithing] = 0,
 			},
-			Inventory = { Stacks = {}, Items = { starter = { DefinitionId = "weapon_sword_starter" } } },
+			Inventory = {
+				Stacks = {},
+				Items = {
+					starter = { DefinitionId = "weapon_sword_starter" },
+					upgraded = { DefinitionId = "weapon_sword_upgraded" },
+				},
+			},
 			Equipment = { [EquipmentSlots.Weapon] = "starter" },
 			Plot = { Stations = {} },
 		},
@@ -182,20 +191,42 @@ test("the target adapter applies Combat's server-derived damage and awards Melee
 		records[userId] = candidate
 		return true, nil
 	end
-	local enemies = enemyFixture({ "enemy-combat" }, { 3 })
+	local enemies = enemyFixture({ "enemy-nonlethal", "enemy-combat" }, { 3, 3 })
+	local nonlethal = assert(enemies.Create(EnemyIds.Goblin))
 	local enemy = assert(enemies.Create(EnemyIds.Goblin))
 	local equipment = Equipment.New(playerData)
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
+	local clock = { Now = 0 }
 	local combat = Combat.New(equipment, skills, enemies.CreateCombatTargetResolver(function(_, target)
-		equal(target.RuntimeId, enemy.RuntimeId)
+		assert(target.RuntimeId == nonlethal.RuntimeId or target.RuntimeId == enemy.RuntimeId)
 		return 5, nil
-	end), { MeleeXPPerSuccessfulHit = 1 }, function() return 0 end)
-	local result = assert(combat.ResolveMeleeAttack(7, enemy.RuntimeId))
-	equal(result.TargetId, enemy.RuntimeId)
+	end), { MeleeXPPerSuccessfulHit = 1 }, function() return clock.Now end)
+	local result = assert(combat.ResolveMeleeAttack(7, nonlethal.RuntimeId))
+	equal(result.TargetId, nonlethal.RuntimeId)
 	equal(result.Damage, 10)
 	equal(result.AppliedDamage, 10)
-	equal(assert(enemies.GetSnapshot(enemy.RuntimeId)).Health, enemy.MaxHealth - 10)
-	equal(records[7].SkillXP[SkillIds.Melee], 1)
+	equal(assert(enemies.GetSnapshot(nonlethal.RuntimeId)).Health, nonlethal.MaxHealth - 10)
+	local noDeath, noDeathReason = enemies.ConsumeDeath(nonlethal.RuntimeId)
+	equal(noDeath, nil)
+	equal(noDeathReason, "DeathNotAvailable")
+	clock.Now += result.AttackIntervalSeconds
+	assert(equipment.Equip(7, EquipmentSlots.Weapon, "upgraded"))
+	local first = assert(combat.ResolveMeleeAttack(7, enemy.RuntimeId))
+	clock.Now += first.AttackIntervalSeconds
+	local final = assert(combat.ResolveMeleeAttack(7, enemy.RuntimeId))
+	equal(final.TargetId, enemy.RuntimeId)
+	equal(final.AppliedDamage, 15)
+	equal(assert(enemies.GetSnapshot(enemy.RuntimeId)).Alive, false)
+	local death = assert(enemies.ConsumeDeath(enemy.RuntimeId))
+	equal(death.RuntimeId, enemy.RuntimeId)
+	equal(death.DefinitionId, EnemyIds.Goblin)
+	equal(death.Level, enemy.Level)
+	equal(death.FinalDamage, 15)
+	equal(death.GoldReward, enemy.GoldReward)
+	local consumed, consumedReason = enemies.ConsumeDeath(enemy.RuntimeId)
+	equal(consumed, nil)
+	equal(consumedReason, "DeathNotAvailable")
+	equal(records[7].SkillXP[SkillIds.Melee], 3)
 end)
 
 print(("%d Enemy checks passed"):format(passed))

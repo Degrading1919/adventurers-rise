@@ -73,6 +73,16 @@ local function copyState(state: State): State
 	}
 end
 
+local function copyDeath(death: Death): Death
+	return {
+		RuntimeId = death.RuntimeId,
+		DefinitionId = death.DefinitionId,
+		Level = death.Level,
+		FinalDamage = death.FinalDamage,
+		GoldReward = death.GoldReward,
+	}
+end
+
 local function derive(definition: Definitions.Definition, level: number): (Stats?, string?)
 	local offset = level - definition.LevelRange.Minimum
 	local maxHealth = definition.Scaling.BaseHealth + definition.Scaling.HealthPerLevel * offset
@@ -90,6 +100,7 @@ function Service.New(runtime: Runtime)
 	assert(valid, reason)
 
 	local enemies: { [string]: State } = {}
+	local pendingDeaths: { [string]: Death } = {}
 	local service = {}
 
 	local function definitionFor(definitionId: any): (Definitions.Definition?, string?)
@@ -131,7 +142,7 @@ function Service.New(runtime: Runtime)
 		if not validStableId(runtimeId) then
 			return nil, "InvalidRuntimeId"
 		end
-		if enemies[runtimeId] then
+		if enemies[runtimeId] or pendingDeaths[runtimeId] then
 			return nil, "RuntimeIdCollision"
 		end
 		local state: State = {
@@ -202,6 +213,19 @@ function Service.New(runtime: Runtime)
 		return { Enemy = copyState(state), AppliedDamage = appliedDamage, Death = death }, nil
 	end
 
+	-- Combat target adapters queue a death here so reward/presentation composition can consume it once.
+	function service.ConsumeDeath(runtimeId: string): (Death?, string?)
+		if not validStableId(runtimeId) then
+			return nil, "InvalidRuntimeId"
+		end
+		local death = pendingDeaths[runtimeId]
+		if not death then
+			return nil, "DeathNotAvailable"
+		end
+		pendingDeaths[runtimeId] = nil
+		return copyDeath(death), nil
+	end
+
 	function service.CreateCombatTargetResolver(distanceFor: DistanceProvider)
 		assert(type(distanceFor) == "function", "Enemies requires a trusted distance provider")
 		return function(attackerUserId: number, runtimeId: string): (CombatTarget?, string?)
@@ -224,6 +248,9 @@ function Service.New(runtime: Runtime)
 					local result, damageReason = service.ApplyDamage(state.RuntimeId, request.Damage)
 					if not result then
 						return nil, damageReason
+					end
+					if result.Death then
+						pendingDeaths[state.RuntimeId] = copyDeath(result.Death)
 					end
 					return result.AppliedDamage, nil
 				end,
