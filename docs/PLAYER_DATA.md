@@ -13,7 +13,7 @@
 | `Inventory.Stacks` | Empty dictionary of stackable item-definition IDs to positive whole counts |
 | `Inventory.Items` | Empty dictionary of server-generated instance IDs to `{ DefinitionId }` records for discrete items |
 | `Equipment` | Dictionary of V1 slot IDs to owned item instance IDs; currently `slot_weapon` and `slot_tool` |
-| `Plot.Stations` | Empty dictionary of station IDs to saved records; no world plot assignment is persisted |
+| `Plot.Stations` | Dictionary of station IDs to saved records such as `{ Tier = number }`; no world plot assignment is persisted |
 | `ProgressionFlags` | Empty dictionary of flag IDs to booleans |
 | `MasterySelections` | Empty dictionary of selected node IDs to booleans for each slice skill |
 | `LastSessionAt` | `0` until the first successful checkpoint/release, then server Unix seconds |
