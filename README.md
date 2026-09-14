@@ -4,7 +4,7 @@
 
 ## Project Status
 
-**Pre-implementation. Core design and the first vertical slice are defined; implementation has not begun.**
+**Project foundation. Core design and the first vertical slice are defined. Minimal server/client bootstraps exist; gameplay implementation has not begun.**
 
 The project is ready to begin narrow, source-controlled vertical-slice engineering tasks. The immediate goal is to prove the complete progression loop and reusable architecture before expanding toward full V1 content.
 
@@ -55,6 +55,28 @@ The repository documentation is intentionally lightweight. These files are the c
 When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, followed by the most recent explicit project-owner decision. Dedicated agreed specifications elaborate the source-of-truth design and should be followed for their respective domains. `PLATFORM_REQUIREMENTS.md` records inherited requirements that remain valid where newer documents are silent.
 
 ## Development Direction
+
+### Source foundation
+
+The only runtime code is two entry points that load the shared, immutable project name and report startup in Output. Add explicit requires for implemented modules as later tasks need them; no system loader, remotes, gameplay, or external dependencies are installed.
+
+The source maps to three **Folder** instances through native [Script Sync](https://create.roblox.com/docs/scripting/sync):
+
+| Repository directory | Studio folder | Current script |
+| --- | --- | --- |
+| `src/Server` | `ServerScriptService.Server` | `Bootstrap.server.luau` → `Bootstrap` (Script, RunContext **Server**) |
+| `src/Client` | `StarterPlayer.StarterPlayerScripts.Client` | `Bootstrap.local.luau` → `Bootstrap` (**LocalScript**) |
+| `src/Shared` | `ReplicatedStorage.Shared` | `Project.luau` → `Project` (ModuleScript) |
+
+Keep the client entry point as `.local.luau` (LocalScript); `.client.luau` means a Script with Client RunContext in native Sync. Shared modules return configuration tables or reusable functions and are visible to clients. `Project.luau` demonstrates a frozen configuration table consumed by both entry points. Future content definitions use stable internal IDs and reusable consumers; server-only logic and trusted state belong under `src/Server`.
+
+For a later authorized Studio setup, create the folders above, select them in Explorer, and use **Script Sync → Sync to…** with the checkout's **`src` parent directory**. Studio appends each folder's name; selecting `src/Server` would create an extra `Server` directory. Review conflicts and choose **Disk version → Keep Disk version** for the reviewed source, preserving wanted Studio edits in Git first. Stop Play before branch switches and reconcile bidirectional Sync edits before committing.
+
+Local place files under `studio/` and their locks are ignored by Git. Studio owns scene saving and local Sync bindings. The repository does not rebuild terrain or world assets. Repository-only tasks must not open or modify the place.
+
+Repository checks: verify script suffixes and paths against the mapping, resolve module references, review strict Luau source, run `git diff --check`, and inspect the complete diff. No standalone Luau runner or automated test suite is included.
+
+When runtime testing is authorized, use **Play** with a client session. Expect `[Adventurer's Rise] Server bootstrap ready` and `[Adventurer's Rise] Client bootstrap ready` once each, with no introduced errors or infinite-yield warnings, then stop Play. The LocalScript runs from the player's copied `PlayerScripts.Client` folder. Report runtime validation separately from repository checks.
 
 The intended implementation workflow is:
 
