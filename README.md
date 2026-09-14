@@ -4,9 +4,9 @@
 
 ## Project Status
 
-**Pre-production / core design. Implementation has not begun.**
+**Pre-implementation. Core design and the first vertical slice are defined; implementation has not begun.**
 
-The current goal is to finish the smallest coherent V1 design that can support a strong 1–2 hour first session, meaningful long-term progression, and repeat play while remaining practical to build primarily through an AI-orchestrated Roblox Studio workflow.
+The project is ready to begin narrow, source-controlled vertical-slice engineering tasks. The immediate goal is to prove the complete progression loop and reusable architecture before expanding toward full V1 content.
 
 ## Current Design at a Glance
 
@@ -32,25 +32,40 @@ The current goal is to finish the smallest coherent V1 design that can support a
 
 ## Design Documentation
 
-The repository documentation is intentionally lightweight. These files are the current project design record:
+The repository documentation is intentionally lightweight. These files are the current project record:
 
-- [`docs/DESIGN_SOURCE_OF_TRUTH.md`](docs/DESIGN_SOURCE_OF_TRUTH.md) — authoritative current game design and open items
-- [`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) — agreed launch boundary, first-session targets, and explicit deferrals
+### Core design
+
+- [`docs/DESIGN_SOURCE_OF_TRUTH.md`](docs/DESIGN_SOURCE_OF_TRUTH.md) — authoritative current game design and open balance/content items
+- [`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) — agreed launch boundary, first-session targets, success criteria, and explicit deferrals
+- [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md) — major design decisions, superseded ideas, and the reasoning trail from the original brief
+
+### System specifications
+
 - [`docs/MASTERY_TREES.md`](docs/MASTERY_TREES.md) — reusable mastery-tree framework and all nine skill branch identities
-- [`docs/PLATFORM_REQUIREMENTS.md`](docs/PLATFORM_REQUIREMENTS.md) — persistent-save, mobile, presentation, and production requirements retained from the original brief
-- [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md) — major decisions, superseded ideas, and current project status
+- [`docs/PLOT_PROGRESSION.md`](docs/PLOT_PROGRESSION.md) — fixed plot layout, combat-station progression, personal production infrastructure, and plot end state
+- [`docs/ONBOARDING_UI.md`](docs/ONBOARDING_UI.md) — first-session objective flow, HUD/menu philosophy, interaction UI, boss/loot presentation, and mobile-first rules
 
-When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, followed by the most recent explicit project-owner decision. `PLATFORM_REQUIREMENTS.md` records inherited requirements that remain valid where the source-of-truth document is silent.
+### Engineering and implementation handoff
+
+- [`docs/TECHNICAL_ARCHITECTURE.md`](docs/TECHNICAL_ARCHITECTURE.md) — server authority, data-driven content, stable IDs, versioned saves, system boundaries, networking, performance, and Codex/Astra responsibilities
+- [`docs/VERTICAL_SLICE.md`](docs/VERTICAL_SLICE.md) — exact first implementation target, exclusions, dependency order, and acceptance criteria before V1 expansion
+- [`docs/PLATFORM_REQUIREMENTS.md`](docs/PLATFORM_REQUIREMENTS.md) — persistent-save, mobile, presentation, and production requirements retained from the original brief
+
+When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, followed by the most recent explicit project-owner decision. Dedicated agreed specifications elaborate the source-of-truth design and should be followed for their respective domains. `PLATFORM_REQUIREMENTS.md` records inherited requirements that remain valid where newer documents are silent.
 
 ## Development Direction
 
-The intended implementation workflow remains:
+The intended implementation workflow is:
 
 - Astra Extra High as primary orchestrator
 - Roblox Studio
 - Roblox Studio MCP
 - Git + GitHub
 - Roblox Script Sync where useful
+- Codex for repository-first engineering tasks
 - Tripo3D with Blender cleanup/optimization where appropriate
 
-Development should favor short specifications, reusable systems, small implementation tasks, rapid playtesting, source control, and reversible changes. The first priority is proving that the progression loop is fun; the second is proving that Astra can build and iterate on it reliably.
+Implementation should favor narrow specifications, reusable systems, data-driven content, small feature branches/PRs, explicit acceptance criteria, rapid playtesting, source control, and reversible changes.
+
+Do **not** ask an implementation agent to build the entire V1 at once. Start from [`docs/VERTICAL_SLICE.md`](docs/VERTICAL_SLICE.md), assign bounded tasks in dependency order, and validate the slice before adding content breadth.
