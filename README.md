@@ -50,7 +50,7 @@ The repository documentation is intentionally lightweight. These files are the c
 
 - [`docs/TECHNICAL_ARCHITECTURE.md`](docs/TECHNICAL_ARCHITECTURE.md) — server authority, data-driven content, stable IDs, versioned saves, system boundaries, networking, performance, and Codex/Astra responsibilities
 - [`docs/VERTICAL_SLICE.md`](docs/VERTICAL_SLICE.md) — exact first implementation target, exclusions, dependency order, and acceptance criteria before V1 expansion
-- [`docs/PLAYER_DATA.md`](docs/PLAYER_DATA.md), [`docs/SKILL_XP.md`](docs/SKILL_XP.md), [`docs/ITEM_INVENTORY.md`](docs/ITEM_INVENTORY.md), [`docs/EQUIPMENT.md`](docs/EQUIPMENT.md), and [`docs/ECONOMY.md`](docs/ECONOMY.md) — implemented persistence, Skill/XP, inventory, equipment, and economy boundaries
+- [`docs/PLAYER_DATA.md`](docs/PLAYER_DATA.md), [`docs/SKILL_XP.md`](docs/SKILL_XP.md), [`docs/ITEM_INVENTORY.md`](docs/ITEM_INVENTORY.md), [`docs/EQUIPMENT.md`](docs/EQUIPMENT.md), [`docs/ECONOMY.md`](docs/ECONOMY.md), and [`docs/PLOT_TRAINING.md`](docs/PLOT_TRAINING.md) — implemented persistence, Skill/XP, inventory, equipment, economy, and plot/training boundaries
 - [`docs/PLATFORM_REQUIREMENTS.md`](docs/PLATFORM_REQUIREMENTS.md) — persistent-save, mobile, presentation, and production requirements retained from the original brief
 
 When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, followed by the most recent explicit project-owner decision. Dedicated agreed specifications elaborate the source-of-truth design and should be followed for their respective domains. `PLATFORM_REQUIREMENTS.md` records inherited requirements that remain valid where newer documents are silent.
@@ -59,7 +59,7 @@ When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, follo
 
 ### Source foundation
 
-Both entry points load the shared, immutable project name and report startup in Output. The server also starts versioned PlayerData loading, autosave, and session cleanup. Server-only Skill/XP, Inventory, Equipment, and Economy modules await explicit composition by their future gameplay tasks; they add no XP/item triggers, client access, combat, gathering, or visuals. See [`docs/PLAYER_DATA.md`](docs/PLAYER_DATA.md), [`docs/SKILL_XP.md`](docs/SKILL_XP.md), [`docs/ITEM_INVENTORY.md`](docs/ITEM_INVENTORY.md), [`docs/EQUIPMENT.md`](docs/EQUIPMENT.md), and [`docs/ECONOMY.md`](docs/ECONOMY.md) for their boundaries and repository checks. No system loader, remotes, gameplay, or external dependencies are installed.
+Both entry points load the shared, immutable project name and report startup in Output. The server also starts versioned PlayerData loading, autosave, and session cleanup. Server-only Skill/XP, Inventory, Equipment, Economy, and Plot/Training modules await explicit composition by their future gameplay tasks; they add no XP/item triggers, client access, combat, gathering, or visuals. See [`docs/PLAYER_DATA.md`](docs/PLAYER_DATA.md), [`docs/SKILL_XP.md`](docs/SKILL_XP.md), [`docs/ITEM_INVENTORY.md`](docs/ITEM_INVENTORY.md), [`docs/EQUIPMENT.md`](docs/EQUIPMENT.md), [`docs/ECONOMY.md`](docs/ECONOMY.md), and [`docs/PLOT_TRAINING.md`](docs/PLOT_TRAINING.md) for their boundaries and repository checks. No system loader, remotes, gameplay, or external dependencies are installed.
 
 The source maps to three **Folder** instances through native [Script Sync](https://create.roblox.com/docs/scripting/sync):
 
