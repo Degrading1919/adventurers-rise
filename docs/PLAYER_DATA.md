@@ -1,23 +1,24 @@
 # PlayerData foundation
 
-`src/Server/PlayerData` owns saves and the private session cache. `Bootstrap.server.luau` creates one service and starts it. Future server modules receive that instance through explicit bootstrap wiring. The only shared addition is `src/Shared/SkillIds.luau`; there are no PlayerData remotes or client writes.
+`src/Server/PlayerData` owns saves and the private session cache. `Bootstrap.server.luau` creates one service and starts it. Future server modules receive that instance through explicit bootstrap wiring. Shared ID/config modules contain no trusted player state; there are no PlayerData remotes or client writes.
 
-## Schema version 1
+## Schema version 2
 
 | Field | Initial value / meaning |
 | --- | --- |
-| `SchemaVersion` | `1` |
+| `SchemaVersion` | `2` |
 | `Gold` | `0`; nonnegative whole number |
 | `SkillXP` | Zero XP for `skill_melee`, `skill_defense`, `skill_mining`, `skill_smithing`; levels are derived later |
 | `Ascension` | `RankId = "ascension_adventurer"`, empty boolean `Flags` keyed by stable IDs |
-| `Inventory` | Empty dictionary; item records and stack rules belong to the inventory task |
+| `Inventory.Stacks` | Empty dictionary of stackable item-definition IDs to positive whole counts |
+| `Inventory.Items` | Empty dictionary of server-generated instance IDs to `{ DefinitionId }` records for discrete items |
 | `Equipment` | Empty dictionary of slot IDs to owned item instance IDs |
 | `Plot.Stations` | Empty dictionary of station IDs to saved records; no world plot assignment is persisted |
 | `ProgressionFlags` | Empty dictionary of flag IDs to booleans |
 | `MasterySelections` | Empty dictionary of selected node IDs to booleans for each slice skill |
 | `LastSessionAt` | `0` until the first successful checkpoint/release, then server Unix seconds |
 
-Every new profile gets independent tables. Records use string-keyed dictionaries and finite JSON primitives, with no Instances, functions, metatables, cycles, arrays, or derived skill levels. Inventory/station entry definitions remain the responsibility of their later systems; adding their schema requires migrations. No starting items, selection rewards, offline calculations, or gameplay behavior are provided.
+Every new profile gets independent tables. Records use string-keyed dictionaries and finite JSON primitives, with no Instances, functions, metatables, cycles, arrays, or derived skill levels. Inventory classification and mutation remain the responsibility of the inventory subsystem; future item-record fields require migrations. No starting items, selection rewards, offline calculations, or gameplay behavior are provided.
 
 ## Persistence and server access
 
@@ -34,9 +35,9 @@ The storage boundaries follow Roblox's [UpdateAsync and metadata guidance](https
 
 ## Schema changes
 
-Version 1 is the initial format; unversioned records have no implicit migration. The empty migration registry is intentional.
+Version 1 was the initial format; unversioned records have no implicit migration. The v1 → v2 migration converts only an empty inventory placeholder into the explicit `Stacks`/`Items` containers. Any non-empty v1 inventory fails migration and is left untouched because its intended stack or discrete representation cannot be inferred safely.
 
-For each persisted schema change, increment `Schema.Version`, update defaults/types/validation, and add `steps[N]` in `Migrations.luau` to transform version N into N+1. Each step must be deterministic, non-yielding, preserve unrelated data, and explicitly set `SchemaVersion = N + 1`. Never reset a failed migration to defaults. Add a fixture from every supported old version; exercise the complete chain and failure cases. `Migrations.Run` exposes the same sequential runner for synthetic forward-migration tests without inventing a version 2 schema.
+For each persisted schema change, increment `Schema.Version`, update defaults/types/validation, and add `steps[N]` in `Migrations.luau` to transform version N into N+1. Each step must be deterministic, non-yielding, preserve unrelated data, and explicitly set `SchemaVersion = N + 1`. Never reset a failed migration to defaults. Add a fixture from every supported old version; exercise the complete chain and failure cases. `Migrations.Run` exposes the same sequential runner for synthetic forward-migration tests.
 
 ## Repository verification
 
@@ -44,6 +45,7 @@ With Python 3.9+ and the official [Luau CLI release](https://github.com/luau-lan
 
 ```powershell
 python tests/run_player_data.py --luau <path-to-luau> --compiler <path-to-luau-compile> --analyzer <path-to-luau-analyze>
+python tests/run_inventory.py --luau <path-to-luau> --compiler <path-to-luau-compile> --analyzer <path-to-luau-analyze>
 git diff --check
 ```
 
