@@ -74,6 +74,7 @@ test("definitions contain only the required classified slice items", function()
 		weapon_sword_upgraded = "Discrete",
 		[BasicPickaxe] = "Discrete",
 		tool_pickaxe_upgraded = "Discrete",
+		item_chieftain_fang = "Stackable",
 	}
 	local count = 0
 	for id, definition in ItemDefinitions.ById do
@@ -81,7 +82,7 @@ test("definitions contain only the required classified slice items", function()
 		equal(definition.Kind, expected[id])
 		count += 1
 	end
-	equal(count, 6)
+	equal(count, 7)
 	equal(ItemDefinitions.ById[StarterSword].Equipment.SlotId, EquipmentSlots.Weapon)
 	equal(ItemDefinitions.ById[BasicPickaxe].Equipment.SlotId, EquipmentSlots.Tool)
 end)
