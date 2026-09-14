@@ -94,7 +94,7 @@ local function fixture(nextInstanceIds)
 	}
 	local inventory = Inventory.New(playerData, runtime)
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
-	local service = Crafting.New(playerData, inventory, skills, runtime)
+	local service = Crafting.New(playerData, inventory, skills)
 	return {
 		Records = records,
 		PlayerData = playerData,
@@ -156,6 +156,9 @@ test("crafting Iron Bar into an upgraded Iron Sword uses a server-generated disc
 	equal(f.Records[7].Inventory.Stacks[IronBar], nil)
 	equal(f.Records[7].Inventory.Items.generated_sword.DefinitionId, UpgradedSword)
 	equal(f.Records[7].SkillXP[SkillIds.Smithing], before.SkillXP[SkillIds.Smithing] + CraftingDefinitions.ById[SwordRecipe].SmithingXP)
+	-- The crafted sword is a real Inventory-owned item, reachable through Inventory's own read API.
+	local owned = assert(f.Inventory.GetDiscreteItem(7, result.OutputInstanceId :: string))
+	equal(owned.DefinitionId, UpgradedSword)
 end)
 
 test("crafting rejects invalid recipe IDs, insufficient Smithing level, and insufficient materials", function()
@@ -210,6 +213,17 @@ test("material, output, and XP-cap failures roll back the combined crafting tran
 	equal(f.Records[7].Inventory.Stacks[IronOre], 10)
 	equal(f.Records[7].Inventory.Stacks[IronBar], nil)
 	equal(f.Records[7].SkillXP[SkillIds.Smithing], 6000)
+end)
+
+test("Crafting has no instance-ID generator of its own and requires Inventory's discrete-item helper", function()
+	local f = fixture()
+	local ok = pcall(function()
+		Crafting.New(f.PlayerData, {
+			AddStackToData = f.Inventory.AddStackToData,
+			RemoveStackFromData = f.Inventory.RemoveStackFromData,
+		}, f.Skills)
+	end)
+	equal(ok, false)
 end)
 
 test("buying recipe inputs from the shop and reselling crafted outputs cannot guarantee Gold profit", function()

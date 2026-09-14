@@ -10,13 +10,11 @@ export type PlayerData = {
 export type Inventory = {
 	read AddStackToData: (any, string, number) -> (number?, string?),
 	read RemoveStackFromData: (any, string, number) -> (number?, string?),
+	read AddDiscreteItemToData: (any, string) -> ({ InstanceId: string, DefinitionId: string }?, string?),
 }
 export type Skills = {
 	read GetStateFromData: (any, string) -> (any?, string?),
 	read AwardXPToData: (any, string, number) -> (any?, string?),
-}
-export type Runtime = {
-	NewInstanceId: () -> string,
 }
 export type Result = {
 	RecipeId: string,
@@ -38,14 +36,16 @@ local function validStableId(value: any): boolean
 	return type(value) == "string" and value ~= ""
 end
 
-function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skills, runtime: Runtime)
+function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skills)
 	assert(type(playerData) == "table" and type(playerData.Update) == "function", "Crafting requires PlayerData")
 	assert(
-		type(inventory) == "table" and type(inventory.AddStackToData) == "function" and type(inventory.RemoveStackFromData) == "function",
+		type(inventory) == "table"
+			and type(inventory.AddStackToData) == "function"
+			and type(inventory.RemoveStackFromData) == "function"
+			and type(inventory.AddDiscreteItemToData) == "function",
 		"Crafting requires Inventory"
 	)
 	assert(type(skills) == "table" and type(skills.GetStateFromData) == "function" and type(skills.AwardXPToData) == "function", "Crafting requires Skills")
-	assert(type(runtime) == "table" and type(runtime.NewInstanceId) == "function", "Crafting requires an instance ID generator")
 	local valid, reason = Definitions.Validate(Definitions.ById)
 	assert(valid, reason)
 
@@ -73,16 +73,6 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 		local outputItem = ItemDefinitions.ById[definition.OutputItemId]
 		if not outputItem then
 			return nil, "InvalidRecipeOutput"
-		end
-
-		-- Discrete instance IDs are always server-generated; callers never supply one.
-		local generatedInstanceId: string? = nil
-		if outputItem.Kind == "Discrete" then
-			local generated, instanceId = pcall(runtime.NewInstanceId)
-			if not generated or type(instanceId) ~= "string" or instanceId == "" then
-				return nil, "InvalidGeneratedInstanceId"
-			end
-			generatedInstanceId = instanceId
 		end
 
 		local result: Result? = nil
@@ -114,16 +104,12 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 					abort(addReason or "InventoryUpdateFailed")
 				end
 			else
-				local inventoryData = data.Inventory
-				if type(inventoryData) ~= "table" or type(inventoryData.Items) ~= "table" then
-					abort("InvalidInventory")
+				-- Inventory is the sole owner of discrete-item creation, including instance-ID generation.
+				local discreteItem, addReason = inventory.AddDiscreteItemToData(data, definition.OutputItemId)
+				if not discreteItem then
+					abort(addReason or "InventoryUpdateFailed")
 				end
-				local instanceId = generatedInstanceId :: string
-				if inventoryData.Items[instanceId] then
-					abort("InstanceIdCollision")
-				end
-				inventoryData.Items[instanceId] = { DefinitionId = definition.OutputItemId }
-				outputInstanceId = instanceId
+				outputInstanceId = (discreteItem :: any).InstanceId
 			end
 
 			local awardedState, xpReason = skills.AwardXPToData(data, definition.SkillId, definition.SmithingXP)
