@@ -137,6 +137,32 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		return nextAmount, nil
 	end
 
+	-- Trusted server compositions may use this inside one PlayerData.Update transaction.
+	function service.RemoveStackFromData(data: any, definitionId: string, amount: number): (number?, string?)
+		local _, definitionReason = definitionFor(definitionId, "Stackable")
+		if definitionReason then
+			return nil, definitionReason
+		end
+		if not validAmount(amount) then
+			return nil, "InvalidAmount"
+		end
+		local inventory = data.Inventory
+		if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
+			return nil, "InvalidInventory"
+		end
+		local current = inventory.Stacks[definitionId]
+		if not validAmount(current) or amount > current then
+			return nil, "InsufficientItems"
+		end
+		local nextAmount = current - amount
+		if nextAmount == 0 then
+			inventory.Stacks[definitionId] = nil
+		else
+			inventory.Stacks[definitionId] = nextAmount
+		end
+		return nextAmount, nil
+	end
+
 	function service.AddStack(userId: number, definitionId: string, amount: number): (number?, string?)
 		local _, definitionReason = definitionFor(definitionId, "Stackable")
 		if definitionReason then
