@@ -1,0 +1,5 @@
+# Studio-owned local places and their session locks are not source code.
+/studio/*.rbxl
+/studio/*.rbxlx
+/studio/*.rbxl.lock
+/studio/*.rbxlx.lock
