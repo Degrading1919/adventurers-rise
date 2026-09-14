@@ -43,7 +43,7 @@ end
 
 -- These requirements, range, yields, and XP rates are provisional and replaceable data.
 local definitions: { [string]: Definition } = {
-	[GatheringNodeIds.IronOre] = definition(GatheringNodeIds.IronOre, "Iron Ore", "item_iron_ore", 2, 12, 1, 2),
+	[GatheringNodeIds.IronOre] = definition(GatheringNodeIds.IronOre, "Iron Ore", "item_iron_ore", 1, 12, 1, 2),
 }
 
 function GatheringDefinitions.Validate(candidateDefinitions: any): (boolean, string?)
