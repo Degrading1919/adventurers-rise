@@ -4,9 +4,21 @@ local Schema = require(script.Parent.Schema)
 
 export type Step = (any) -> any
 
--- Indexed by the source version: steps[1] must produce SchemaVersion 2.
--- Version 1 is the first shipped schema; there is no legacy/unversioned format.
-local steps: { [number]: Step } = {}
+-- Indexed by source version: steps[1] must produce SchemaVersion 2.
+-- Version 1 shipped with an empty inventory placeholder. Its non-empty values have no
+-- reliable stack/discrete interpretation, so they must not be guessed or discarded.
+local function migrateV1ToV2(data: any): any
+	if type(data.Inventory) ~= "table" or next(data.Inventory) ~= nil then
+		error("Cannot safely migrate a non-empty v1 inventory")
+	end
+	data.Inventory = { Stacks = {}, Items = {} }
+	data.SchemaVersion = 2
+	return data
+end
+
+local steps: { [number]: Step } = {
+	[1] = migrateV1ToV2,
+}
 table.freeze(steps)
 
 local Migrations = {}

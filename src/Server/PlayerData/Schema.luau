@@ -4,12 +4,17 @@ local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
 
 export type Value = boolean | number | string | { [string]: Value }
 export type Record = { [string]: Value }
+export type DiscreteItem = { DefinitionId: string }
+export type Inventory = {
+	Stacks: { [string]: number },
+	Items: { [string]: DiscreteItem },
+}
 export type Data = {
 	SchemaVersion: number,
 	Gold: number,
 	SkillXP: { [string]: number },
 	Ascension: { RankId: string, Flags: { [string]: boolean } },
-	Inventory: Record,
+	Inventory: Inventory,
 	Equipment: { [string]: string },
 	Plot: { Stations: { [string]: Record } },
 	ProgressionFlags: { [string]: boolean },
@@ -17,7 +22,7 @@ export type Data = {
 	LastSessionAt: number,
 }
 
-local Schema = { Version = 1, MaxDepth = 16 }
+local Schema = { Version = 2, MaxDepth = 16 }
 
 function Schema.New(): Data
 	local xp: { [string]: number } = {}
@@ -31,7 +36,7 @@ function Schema.New(): Data
 		Gold = 0,
 		SkillXP = xp,
 		Ascension = { RankId = "ascension_adventurer", Flags = {} },
-		Inventory = {},
+		Inventory = { Stacks = {}, Items = {} },
 		Equipment = {},
 		Plot = { Stations = {} },
 		ProgressionFlags = {},
@@ -81,6 +86,10 @@ local function whole(value: any): boolean
 	return type(value) == "number" and value >= 0 and value <= 9007199254740991 and value % 1 == 0
 end
 
+local function positiveWhole(value: any): boolean
+	return whole(value) and value > 0
+end
+
 local function dictionary(value: any, check: (any) -> boolean): boolean
 	if type(value) ~= "table" then
 		return false
@@ -118,6 +127,9 @@ function Schema.Validate(value: any): boolean
 	local function flags(item: any): boolean
 		return dictionary(item, function(flag) return type(flag) == "boolean" end)
 	end
+	local function discreteItem(item: any): boolean
+		return sameKeys(item, { DefinitionId = "" }) and type(item.DefinitionId) == "string" and item.DefinitionId ~= ""
+	end
 	return sameKeys(value, defaults)
 		and value.SchemaVersion == Schema.Version
 		and whole(value.Gold)
@@ -126,7 +138,9 @@ function Schema.Validate(value: any): boolean
 		and sameKeys(value.Ascension, defaults.Ascension)
 		and type(value.Ascension.RankId) == "string" and value.Ascension.RankId ~= ""
 		and flags(value.Ascension.Flags)
-		and type(value.Inventory) == "table"
+		and sameKeys(value.Inventory, defaults.Inventory)
+		and dictionary(value.Inventory.Stacks, positiveWhole)
+		and dictionary(value.Inventory.Items, discreteItem)
 		and dictionary(value.Equipment, function(id) return type(id) == "string" and id ~= "" end)
 		and sameKeys(value.Plot, defaults.Plot)
 		and dictionary(value.Plot.Stations, function(state) return type(state) == "table" end)

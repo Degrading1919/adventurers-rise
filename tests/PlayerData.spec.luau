@@ -55,10 +55,17 @@ local function fixture()
 	return f
 end
 
-test("fresh v1 defaults have stable IDs, independent containers, and no derived levels", function()
+local function versionOneData()
+	local data = Schema.New()
+	data.SchemaVersion = 1
+	data.Inventory = {}
+	return data
+end
+
+test("fresh v2 defaults have stable IDs, independent containers, and no derived levels", function()
 	local a, b = Schema.New(), Schema.New()
 	assert(Schema.Validate(a))
-	equal(a.SchemaVersion, 1)
+	equal(a.SchemaVersion, 2)
 	equal(a.Gold, 0)
 	equal(a.LastSessionAt, 0)
 	equal(a.Ascension.RankId, "ascension_adventurer")
@@ -71,10 +78,11 @@ test("fresh v1 defaults have stable IDs, independent containers, and no derived 
 		count += 1
 	end
 	equal(count, 4)
-	a.Inventory.test_item = { Count = 1 }
+	a.Inventory.Items.test_instance = { DefinitionId = "test_definition" }
 	a.Plot.Stations.test_station = { Tier = 1 }
 	a.Ascension.Flags.test_flag = true
-	equal(next(b.Inventory), nil)
+	equal(next(b.Inventory.Stacks), nil)
+	equal(next(b.Inventory.Items), nil)
 	equal(next(b.Plot.Stations), nil)
 	equal(next(b.Ascension.Flags), nil)
 	a.SkillLevels = {}
@@ -103,7 +111,7 @@ test("schema rejects malformed and non-serializable saves", function()
 end)
 
 test("migrations run sequentially without mutating stored input", function()
-	local raw = Schema.New()
+	local raw = versionOneData()
 	local migrated = assert(Migrations.Run(raw, 3, {
 		[1] = function(d) d.Gold = 12; d.SchemaVersion = 2; return d end,
 		[2] = function(d) equal(d.Gold, 12); d.Gold += 3; d.SchemaVersion = 3; return d end,
@@ -115,22 +123,52 @@ test("migrations run sequentially without mutating stored input", function()
 end)
 
 test("missing, invalid, unversioned, and future migrations fail closed", function()
-	local _, reason = Migrations.Run(Schema.New(), 2, {})
+	local _, reason = Migrations.Run(Schema.New(), 3, {})
 	equal(reason, "MissingMigration")
 	for _, step in {
 		function() error("bad migration") end,
 		function(d) return d end,
-		function(d) d.SchemaVersion = 3; return d end,
+		function(d) d.SchemaVersion = 4; return d end,
 	} do
-		local _, failure = Migrations.Run(Schema.New(), 2, { [1] = step })
+		local _, failure = Migrations.Run(Schema.New(), 3, { [2] = step })
 		equal(failure, "InvalidMigration")
 	end
 	local _, missing = Migrations.ToCurrent({ Gold = 20 })
 	equal(missing, "InvalidVersion")
 	local data = Schema.New()
-	data.SchemaVersion = 2
+	data.SchemaVersion = Schema.Version + 1
 	local _, future = Migrations.ToCurrent(data)
 	equal(future, "FutureVersion")
+end)
+
+test("real v1 to v2 migration creates explicit inventory containers", function()
+	local raw = versionOneData()
+	raw.Gold = 50
+	local migrated = assert(Migrations.ToCurrent(raw))
+	equal(migrated.SchemaVersion, 2)
+	equal(migrated.Gold, 50)
+	equal(next(migrated.Inventory.Stacks), nil)
+	equal(next(migrated.Inventory.Items), nil)
+	equal(raw.SchemaVersion, 1)
+	equal(next(raw.Inventory), nil)
+	local f = fixture()
+	f.Records.player_7 = { Data = raw }
+	local session = assert(f.Store.Load(7))
+	equal(session.Data.SchemaVersion, 2)
+	equal(f.Records.player_7.Data.SchemaVersion, 2)
+	assert(Schema.Validate(f.Records.player_7.Data))
+end)
+
+test("ambiguous non-empty v1 inventory is never discarded during migration", function()
+	local raw = versionOneData()
+	raw.Inventory.legacy_item = { DefinitionId = "unknown" }
+	local migrated, reason = Migrations.ToCurrent(raw)
+	equal(migrated, nil)
+	equal(reason, "InvalidMigration")
+	local f = fixture()
+	f.Records.player_7 = { Data = raw }
+	equal(f.Store.Load(7), nil)
+	equal(f.Records.player_7.Data.Inventory.legacy_item.DefinitionId, "unknown")
 end)
 
 test("new load, checkpoint, release, and rejoin preserve all requested state", function()
@@ -140,7 +178,7 @@ test("new load, checkpoint, release, and rejoin preserve all requested state", f
 	data.Gold = 50
 	data.SkillXP.skill_mining = 12.5
 	data.Ascension = { RankId = "ascension_adept", Flags = { test_flag = true } }
-	data.Inventory.test_item = { DefinitionId = "test_definition" }
+	data.Inventory.Items.test_instance = { DefinitionId = "test_definition" }
 	data.Equipment.test_slot = "test_item"
 	data.Plot.Stations.test_station = { Tier = 1 }
 	data.ProgressionFlags.test_flag = true
@@ -156,7 +194,7 @@ test("new load, checkpoint, release, and rejoin preserve all requested state", f
 	equal(loaded.SkillXP.skill_mining, 12.5)
 	equal(loaded.Ascension.RankId, "ascension_adept")
 	assert(loaded.Ascension.Flags.test_flag)
-	equal(loaded.Inventory.test_item.DefinitionId, "test_definition")
+	equal(loaded.Inventory.Items.test_instance.DefinitionId, "test_definition")
 	equal(loaded.Equipment.test_slot, "test_item")
 	equal(loaded.Plot.Stations.test_station.Tier, 1)
 	assert(loaded.ProgressionFlags.test_flag and loaded.MasterySelections.skill_melee.test_node)
@@ -176,8 +214,9 @@ end)
 test("maximum supported data nesting survives the transport envelope", function()
 	local f = fixture()
 	local session = assert(f.Store.Load(7))
-	local current = session.Data.Inventory
-	for _ = 2, Schema.MaxDepth do
+	session.Data.Plot.Stations.test_station = {}
+	local current = session.Data.Plot.Stations.test_station
+	for _ = 4, Schema.MaxDepth do
 		current.child = {}
 		current = current.child
 	end
@@ -203,7 +242,7 @@ end)
 test("malformed and newer stored records are untouched", function()
 	for _, raw in { {}, { SchemaVersion = 1 }, Schema.New() } do
 		local f = fixture()
-		if raw.Gold then raw.SchemaVersion = 2 end
+		if raw.Gold then raw.SchemaVersion = Schema.Version + 1 end
 		f.Records.player_7 = { Data = raw }
 		local before = f.Records.player_7
 		equal(f.Store.Load(7), nil)
