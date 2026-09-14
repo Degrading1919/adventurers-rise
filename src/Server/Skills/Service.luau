@@ -110,6 +110,39 @@ function Service.New(playerData: PlayerData, configuration: Configuration)
 		return curves[definition.CurveId], nil
 	end
 
+	-- Trusted server compositions may use these inside one PlayerData.Update transaction.
+	function service.GetStateFromData(data: any, skillId: string): (State?, string?)
+		local curve, reason = curveFor(skillId)
+		if not curve then
+			return nil, reason
+		end
+		local xp = data.SkillXP and data.SkillXP[skillId]
+		if not finiteNonNegative(xp) or xp > curve.MaximumXP then
+			return nil, "XPOutOfBounds"
+		end
+		return stateFor(skillId, curve, xp), nil
+	end
+
+	function service.AwardXPToData(data: any, skillId: string, amount: number): (State?, string?)
+		if not finiteNonNegative(amount) or amount <= 0 then
+			return nil, "InvalidXPAmount"
+		end
+		local curve, reason = curveFor(skillId)
+		if not curve then
+			return nil, reason
+		end
+		local xp = data.SkillXP and data.SkillXP[skillId]
+		if not finiteNonNegative(xp) or xp > curve.MaximumXP then
+			return nil, "XPOutOfBounds"
+		end
+		local nextXP = xp + amount
+		if not finiteNonNegative(nextXP) or nextXP > curve.MaximumXP then
+			return nil, "XPOutOfBounds"
+		end
+		data.SkillXP[skillId] = nextXP
+		return stateFor(skillId, curve, nextXP), nil
+	end
+
 	function service.GetState(userId: number, skillId: string): (State?, string?)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"
@@ -122,11 +155,7 @@ function Service.New(playerData: PlayerData, configuration: Configuration)
 		if not data then
 			return nil, "NotReady"
 		end
-		local xp = data.SkillXP and data.SkillXP[skillId]
-		if not finiteNonNegative(xp) or xp > curve.MaximumXP then
-			return nil, "XPOutOfBounds"
-		end
-		return stateFor(skillId, curve, xp), nil
+		return service.GetStateFromData(data, skillId)
 	end
 
 	function service.AwardXP(userId: number, skillId: string, amount: number): (State?, string?)
@@ -136,25 +165,14 @@ function Service.New(playerData: PlayerData, configuration: Configuration)
 		if not finiteNonNegative(amount) or amount <= 0 then
 			return nil, "InvalidXPAmount"
 		end
-		local curve, reason = curveFor(skillId)
-		if not curve then
+		local _, reason = curveFor(skillId)
+		if reason then
 			return nil, reason
 		end
 		local result: State? = nil
 		local awardReason: string? = nil
 		local ok, updateReason = playerData.Update(userId, function(data)
-			local xp = data.SkillXP and data.SkillXP[skillId]
-			if not finiteNonNegative(xp) or xp > curve.MaximumXP then
-				awardReason = "XPOutOfBounds"
-				return
-			end
-			local nextXP = xp + amount
-			if not finiteNonNegative(nextXP) or nextXP > curve.MaximumXP then
-				awardReason = "XPOutOfBounds"
-				return
-			end
-			data.SkillXP[skillId] = nextXP
-			result = stateFor(skillId, curve, nextXP)
+			result, awardReason = service.AwardXPToData(data, skillId, amount)
 		end)
 		if not ok then
 			return nil, updateReason or "PlayerDataUpdateFailed"

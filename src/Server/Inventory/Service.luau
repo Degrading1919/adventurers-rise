@@ -112,6 +112,31 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		return { InstanceId = instanceId, DefinitionId = definitionId }, nil
 	end
 
+	-- Trusted server compositions may use this inside one PlayerData.Update transaction.
+	function service.AddStackToData(data: any, definitionId: string, amount: number): (number?, string?)
+		local _, definitionReason = definitionFor(definitionId, "Stackable")
+		if definitionReason then
+			return nil, definitionReason
+		end
+		if not validAmount(amount) then
+			return nil, "InvalidAmount"
+		end
+		local inventory = data.Inventory
+		if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
+			return nil, "InvalidInventory"
+		end
+		local current = inventory.Stacks[definitionId] or 0
+		if current ~= 0 and not validAmount(current) then
+			return nil, "InvalidInventory"
+		end
+		local nextAmount = current + amount
+		if not validAmount(nextAmount) then
+			return nil, "AmountOutOfBounds"
+		end
+		inventory.Stacks[definitionId] = nextAmount
+		return nextAmount, nil
+	end
+
 	function service.AddStack(userId: number, definitionId: string, amount: number): (number?, string?)
 		local _, definitionReason = definitionFor(definitionId, "Stackable")
 		if definitionReason then
@@ -126,23 +151,7 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		local result: number? = nil
 		local mutationReason: string? = nil
 		local ok, updateReason = playerData.Update(userId, function(data)
-			local inventory = data.Inventory
-			if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
-				mutationReason = "InvalidInventory"
-				return
-			end
-			local current = inventory and inventory.Stacks and inventory.Stacks[definitionId] or 0
-			if (current ~= 0 and not validAmount(current)) then
-				mutationReason = "InvalidInventory"
-				return
-			end
-			local nextAmount = current + amount
-			if not validAmount(nextAmount) then
-				mutationReason = "AmountOutOfBounds"
-				return
-			end
-			inventory.Stacks[definitionId] = nextAmount
-			result = nextAmount
+			result, mutationReason = service.AddStackToData(data, definitionId, amount)
 		end)
 		if not ok then
 			return nil, updateReason or "PlayerDataUpdateFailed"

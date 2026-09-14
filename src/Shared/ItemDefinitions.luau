@@ -12,11 +12,15 @@ export type Melee = {
 	read AttackIntervalSeconds: number,
 	read AttackRange: number,
 }
+export type Mining = {
+	read GatheringRateMultiplier: number,
+}
 export type Definition = {
 	read Id: string,
 	read Kind: Kind,
 	read Equipment: Equipment?,
 	read Melee: Melee?,
+	read Mining: Mining?,
 }
 
 local function equipment(slotId: string, effectivenessTier: number): Equipment
@@ -31,18 +35,22 @@ local function melee(damage: number, attackIntervalSeconds: number, attackRange:
 	})
 end
 
-local function definition(id: string, kind: Kind, equipmentData: Equipment?, meleeData: Melee?): Definition
-	return table.freeze({ Id = id, Kind = kind, Equipment = equipmentData, Melee = meleeData })
+local function mining(gatheringRateMultiplier: number): Mining
+	return table.freeze({ GatheringRateMultiplier = gatheringRateMultiplier })
 end
 
--- Persist these IDs. Tiers and melee values are provisional, centralized balance data.
+local function definition(id: string, kind: Kind, equipmentData: Equipment?, meleeData: Melee?, miningData: Mining?): Definition
+	return table.freeze({ Id = id, Kind = kind, Equipment = equipmentData, Melee = meleeData, Mining = miningData })
+end
+
+-- Persist these IDs. Tiers, melee, and mining values are provisional centralized balance data.
 local definitions: { [string]: Definition } = {
 	item_iron_ore = definition("item_iron_ore", "Stackable"),
 	item_iron_bar = definition("item_iron_bar", "Stackable"),
 	weapon_sword_starter = definition("weapon_sword_starter", "Discrete", equipment(EquipmentSlots.Weapon, 1), melee(10, 1, 8)),
 	weapon_sword_upgraded = definition("weapon_sword_upgraded", "Discrete", equipment(EquipmentSlots.Weapon, 2), melee(15, 0.8, 9)),
-	tool_pickaxe_basic = definition("tool_pickaxe_basic", "Discrete", equipment(EquipmentSlots.Tool, 1)),
-	tool_pickaxe_upgraded = definition("tool_pickaxe_upgraded", "Discrete", equipment(EquipmentSlots.Tool, 2)),
+	tool_pickaxe_basic = definition("tool_pickaxe_basic", "Discrete", equipment(EquipmentSlots.Tool, 1), nil, mining(1)),
+	tool_pickaxe_upgraded = definition("tool_pickaxe_upgraded", "Discrete", equipment(EquipmentSlots.Tool, 2), nil, mining(2)),
 }
 
 return table.freeze({
