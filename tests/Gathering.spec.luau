@@ -120,7 +120,7 @@ test("Iron Ore uses a stable nondepleting gathering definition", function()
 	equal(node.Id, IronNode)
 	equal(node.OutputItemId, IronOre)
 	equal(node.SkillId, SkillIds.Mining)
-	equal(node.RequiredMiningLevel, 2)
+	equal(node.RequiredMiningLevel, 1)
 	equal(node.MaximumRange, 12)
 	equal(node.IsDepleting, false)
 end)
@@ -143,7 +143,7 @@ test("basic and upgraded pickaxes use centralized mining effectiveness", functio
 	equal(f.Records[7].SkillXP[SkillIds.Mining], 112)
 end)
 
-test("gathering requires an equipped compatible tool and configured Mining level", function()
+test("gathering requires an equipped compatible Mining tool", function()
 	local f = fixture()
 	f.Records[7].Equipment[EquipmentSlots.Tool] = nil
 	local missing, missingReason = f.Service.GatherForElapsed(7, IronNode, 2)
@@ -153,12 +153,23 @@ test("gathering requires an equipped compatible tool and configured Mining level
 	local wrong, wrongReason = f.Service.GatherForElapsed(7, IronNode, 2)
 	equal(wrong, nil)
 	equal(wrongReason, "InvalidEquipment")
-	f.Records[7].Equipment[EquipmentSlots.Tool] = "basic"
-	f.Records[7].SkillXP[SkillIds.Mining] = 0
-	local lowLevel, lowLevelReason = f.Service.GatherForElapsed(7, IronNode, 2)
-	equal(lowLevel, nil)
-	equal(lowLevelReason, "InsufficientMiningLevel")
 	equal(f.Records[7].Inventory.Stacks[IronOre], nil)
+	-- Iron Ore requires Mining level 1, the floor every player starts at, so the "InsufficientMiningLevel"
+	-- rejection path in Gathering/Service.luau has no reachable case with the current single resource;
+	-- it remains in place for a future higher-tier node.
+end)
+
+test("a fresh level-1 Mining player can gather Iron Ore and begin earning Mining XP", function()
+	local f = fixture()
+	f.Records[7].SkillXP[SkillIds.Mining] = 0
+	equal(assert(f.Skills.GetState(7, SkillIds.Mining)).Level, 1)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 2)
+	equal(result.MiningXP, 4)
+	equal(result.TotalOre, 2)
+	equal(f.Records[7].Inventory.Stacks[IronOre], 2)
+	equal(f.Records[7].SkillXP[SkillIds.Mining], 4)
+	equal(result.MiningState.Level, 1)
 end)
 
 test("trusted node eligibility, range, IDs, and elapsed bounds are validated", function()
