@@ -40,12 +40,18 @@ export type CombatTarget = {
 	Distance: number,
 	ApplyDamage: (any) -> (number?, string?),
 }
+-- Boss contribution: attacking user ID -> total applied damage against one boss runtime instance.
+export type Contribution = { [number]: number }
 
 local MaximumSafeWhole = 9007199254740991
 local Service = {}
 
 local function validStableId(value: any): boolean
 	return type(value) == "string" and value ~= ""
+end
+
+local function validUserId(value: any): boolean
+	return type(value) == "number" and value > 0 and value % 1 == 0 and value <= MaximumSafeWhole
 end
 
 local function finitePositive(value: any): boolean
@@ -101,6 +107,9 @@ function Service.New(runtime: Runtime)
 
 	local enemies: { [string]: State } = {}
 	local pendingDeaths: { [string]: Death } = {}
+	-- Only populated for boss-flagged definitions (Definitions.ById[...].Boss ~= nil); normal
+	-- enemies never accumulate contribution.
+	local contributions: { [string]: Contribution } = {}
 	local service = {}
 
 	local function definitionFor(definitionId: any): (Definitions.Definition?, string?)
@@ -179,7 +188,24 @@ function Service.New(runtime: Runtime)
 			return nil, "EnemyNotFound"
 		end
 		enemies[runtimeId] = nil
+		contributions[runtimeId] = nil
 		return copyState(state), nil
+	end
+
+	-- Read-only contribution summary for debugging/UI; never mutates state. An empty table is a
+	-- valid summary (no boss-flagged damage recorded yet), not an error.
+	function service.GetContribution(runtimeId: string): (Contribution?, string?)
+		if not validStableId(runtimeId) then
+			return nil, "InvalidRuntimeId"
+		end
+		local runtimeContribution = contributions[runtimeId]
+		local result: Contribution = {}
+		if runtimeContribution then
+			for userId, amount in runtimeContribution do
+				result[userId] = amount
+			end
+		end
+		return result, nil
 	end
 
 	function service.ApplyDamage(runtimeId: string, amount: number): (DamageResult?, string?)
@@ -248,6 +274,17 @@ function Service.New(runtime: Runtime)
 					local result, damageReason = service.ApplyDamage(state.RuntimeId, request.Damage)
 					if not result then
 						return nil, damageReason
+					end
+					-- Attribute only the actual applied (already overkill-clamped) damage, and only
+					-- for boss-flagged enemies -- normal Goblin combat is otherwise unaffected.
+					local definition = Definitions.ById[state.DefinitionId]
+					if definition and definition.Boss and validUserId(attackerUserId) then
+						local runtimeContribution = contributions[state.RuntimeId]
+						if not runtimeContribution then
+							runtimeContribution = {}
+							contributions[state.RuntimeId] = runtimeContribution
+						end
+						runtimeContribution[attackerUserId] = (runtimeContribution[attackerUserId] or 0) + result.AppliedDamage
 					end
 					if result.Death then
 						pendingDeaths[state.RuntimeId] = copyDeath(result.Death)

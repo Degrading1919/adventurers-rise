@@ -51,6 +51,8 @@ local definitions: { [string]: Definition } = {
 	weapon_sword_upgraded = definition("weapon_sword_upgraded", "Discrete", equipment(EquipmentSlots.Weapon, 2), melee(15, 0.8, 9)),
 	tool_pickaxe_basic = definition("tool_pickaxe_basic", "Discrete", equipment(EquipmentSlots.Tool, 1), nil, mining(1)),
 	tool_pickaxe_upgraded = definition("tool_pickaxe_upgraded", "Discrete", equipment(EquipmentSlots.Tool, 2), nil, mining(2)),
+	-- Rare Goblin Chieftain boss material; the minimum new item ID needed to demonstrate rare boss loot.
+	item_chieftain_fang = definition("item_chieftain_fang", "Stackable"),
 }
 
 return table.freeze({

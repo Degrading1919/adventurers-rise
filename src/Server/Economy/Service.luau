@@ -139,6 +139,23 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		return goldFor(data)
 	end
 
+	-- Trusted server compositions may use this inside one PlayerData.Update transaction.
+	function service.CreditGoldToData(data: any, amount: number): (number?, string?)
+		if not validPositiveWhole(amount, Service.MaximumGold) then
+			return nil, "InvalidAmount"
+		end
+		local gold, goldReason = goldFor(data)
+		if not gold then
+			return nil, goldReason
+		end
+		if gold > Service.MaximumGold - amount then
+			return nil, "GoldOutOfBounds"
+		end
+		local result = gold + amount
+		data.Gold = result
+		return result, nil
+	end
+
 	function service.CreditGold(userId: number, amount: number): (number?, string?)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"
@@ -149,17 +166,7 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		local result: number? = nil
 		local mutationReason: string? = nil
 		local ok, updateReason = playerData.Update(userId, function(data)
-			local gold, goldReason = goldFor(data)
-			if not gold then
-				mutationReason = goldReason
-				return
-			end
-			if gold > Service.MaximumGold - amount then
-				mutationReason = "GoldOutOfBounds"
-				return
-			end
-			result = gold + amount
-			data.Gold = result
+			result, mutationReason = service.CreditGoldToData(data, amount)
 		end)
 		if not ok then
 			return nil, updateReason or "PlayerDataUpdateFailed"
