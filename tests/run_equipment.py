@@ -1,4 +1,4 @@
-"""Run real Inventory ModuleScripts against a minimal trusted PlayerData boundary."""
+"""Run the Equipment ModuleScript against a minimal trusted PlayerData boundary."""
 
 import argparse
 from pathlib import Path
@@ -20,7 +20,7 @@ def main():
     modules = {
         "EquipmentSlots": root / "src/Shared/EquipmentSlots.luau",
         "ItemDefinitions": root / "src/Shared/ItemDefinitions.luau",
-        "Service": root / "src/Server/Inventory/Service.luau",
+        "EquipmentService": root / "src/Server/Equipment/Service.luau",
     }
     wrappers = ["local loaders = {}"]
     for name, path in modules.items():
@@ -44,17 +44,20 @@ local function moduleRequire(name)
 end
 local function runTests(require)
 ''')
-    wrappers.append((root / "tests/Inventory.spec.luau").read_text(encoding="utf-8"))
+    wrappers.append((root / "tests/Equipment.spec.luau").read_text(encoding="utf-8"))
     wrappers.append("end\nrunTests(moduleRequire)\n")
 
-    with tempfile.TemporaryDirectory(prefix=".inventory-", dir=root / "tests") as directory:
+    with tempfile.TemporaryDirectory(prefix=".equipment-", dir=root / "tests") as directory:
         temporary = Path(directory)
         assert temporary.resolve().is_relative_to(root / "tests")
         adapted = []
         for name, path in modules.items():
             source = path.read_text(encoding="utf-8")
-            source = source.replace('require(game:GetService("ReplicatedStorage").Shared.ItemDefinitions)', 'require("./ItemDefinitions")')
+            source = source.replace('local ReplicatedStorage = game:GetService("ReplicatedStorage")\nlocal Shared = ReplicatedStorage.Shared\n', '')
+            source = source.replace('require(Shared.EquipmentSlots)', 'require("./EquipmentSlots")')
+            source = source.replace('require(Shared.ItemDefinitions)', 'require("./ItemDefinitions")')
             source = source.replace('require(game:GetService("ReplicatedStorage").Shared.EquipmentSlots)', 'require("./EquipmentSlots")')
+            source = source.replace('require(game:GetService("ReplicatedStorage").Shared.ItemDefinitions)', 'require("./ItemDefinitions")')
             target = temporary / f"{name}.luau"
             target.write_text(source, encoding="utf-8")
             adapted.append(str(target))
