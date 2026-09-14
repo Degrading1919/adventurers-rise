@@ -20,6 +20,7 @@ The current goal is to finish the smallest coherent V1 design that can support a
 - Central hub + 3 compact, soft-gated progression regions
 - 12 working standard enemy archetypes + 6 shared-server bosses
 - Mostly automatic targeting and hold-to-attack combat designed for Roblox/mobile usability
+- Persistent player save data for permanent progression
 - Persistent simulator-style Mining and Woodcutting nodes
 - Interconnected crafting with simple intermediate production chains
 - Visible shared player plots with upgradeable combat training stations and later personal production stations
@@ -36,9 +37,10 @@ The repository documentation is intentionally lightweight. These files are the c
 - [`docs/DESIGN_SOURCE_OF_TRUTH.md`](docs/DESIGN_SOURCE_OF_TRUTH.md) — authoritative current game design and open items
 - [`docs/V1_SCOPE.md`](docs/V1_SCOPE.md) — agreed launch boundary, first-session targets, and explicit deferrals
 - [`docs/MASTERY_TREES.md`](docs/MASTERY_TREES.md) — reusable mastery-tree framework and all nine skill branch identities
+- [`docs/PLATFORM_REQUIREMENTS.md`](docs/PLATFORM_REQUIREMENTS.md) — persistent-save, mobile, presentation, and production requirements retained from the original brief
 - [`docs/DECISION_LOG.md`](docs/DECISION_LOG.md) — major decisions, superseded ideas, and current project status
 
-When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, followed by the most recent explicit project-owner decision.
+When documents conflict, **`DESIGN_SOURCE_OF_TRUTH.md` takes precedence**, followed by the most recent explicit project-owner decision. `PLATFORM_REQUIREMENTS.md` records inherited requirements that remain valid where the source-of-truth document is silent.
 
 ## Development Direction
 
