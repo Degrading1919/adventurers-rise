@@ -12,7 +12,7 @@
 | `Ascension` | `RankId = "ascension_adventurer"`, empty boolean `Flags` keyed by stable IDs |
 | `Inventory.Stacks` | Empty dictionary of stackable item-definition IDs to positive whole counts |
 | `Inventory.Items` | Empty dictionary of server-generated instance IDs to `{ DefinitionId }` records for discrete items |
-| `Equipment` | Empty dictionary of slot IDs to owned item instance IDs |
+| `Equipment` | Dictionary of V1 slot IDs to owned item instance IDs; currently `slot_weapon` and `slot_tool` |
 | `Plot.Stations` | Empty dictionary of station IDs to saved records; no world plot assignment is persisted |
 | `ProgressionFlags` | Empty dictionary of flag IDs to booleans |
 | `MasterySelections` | Empty dictionary of selected node IDs to booleans for each slice skill |

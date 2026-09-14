@@ -236,8 +236,13 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		local mutationReason: string? = nil
 		local ok, updateReason = playerData.Update(userId, function(data)
 			local inventory = data.Inventory
+			local equipment = data.Equipment
 			if type(inventory) ~= "table" or type(inventory.Items) ~= "table" then
 				mutationReason = "InvalidInventory"
+				return
+			end
+			if type(equipment) ~= "table" then
+				mutationReason = "InvalidEquipment"
 				return
 			end
 			local item = inventory.Items[instanceId]
@@ -250,6 +255,12 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 			if definitionReason then
 				mutationReason = "InvalidInventory"
 				return
+			end
+			for _, equippedInstanceId in equipment do
+				if equippedInstanceId == instanceId then
+					mutationReason = "ItemEquipped"
+					return
+				end
 			end
 			inventory.Items[instanceId] = nil
 			result = { InstanceId = instanceId, DefinitionId = definitionId }

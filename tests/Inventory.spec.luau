@@ -1,6 +1,7 @@
 --!strict
 
 local ItemDefinitions = require("ItemDefinitions")
+local EquipmentSlots = require("EquipmentSlots")
 local Inventory = require("Service")
 
 local Ore = "item_iron_ore"
@@ -81,6 +82,8 @@ test("definitions contain only the required classified slice items", function()
 		count += 1
 	end
 	equal(count, 6)
+	equal(ItemDefinitions.ById[StarterSword].Equipment.SlotId, EquipmentSlots.Weapon)
+	equal(ItemDefinitions.ById[BasicPickaxe].Equipment.SlotId, EquipmentSlots.Tool)
 end)
 
 test("trusted stack mutations preserve unrelated PlayerData state", function()
@@ -164,6 +167,16 @@ test("overflow, underflow, collisions, and PlayerData failures preserve inventor
 	equal(unavailable, nil)
 	equal(unavailableReason, "NotReady")
 	equal(f.Records[7].Inventory.Stacks[Ore], Inventory.MaximumStack)
+end)
+
+test("equipped discrete items cannot be removed", function()
+	local f = fixture({ "instance_sword" })
+	assert(f.Service.AddDiscreteItem(7, StarterSword))
+	f.Records[7].Equipment[EquipmentSlots.Weapon] = "instance_sword"
+	local removed, reason = f.Service.RemoveDiscreteItem(7, "instance_sword")
+	equal(removed, nil)
+	equal(reason, "ItemEquipped")
+	equal(f.Records[7].Inventory.Items.instance_sword.DefinitionId, StarterSword)
 end)
 
 print(("%d Inventory checks passed"):format(passed))
