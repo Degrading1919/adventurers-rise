@@ -169,6 +169,29 @@ test("overflow, underflow, collisions, and PlayerData failures preserve inventor
 	equal(f.Records[7].Inventory.Stacks[Ore], Inventory.MaximumStack)
 end)
 
+test("public stack and discrete-item mutations delegate to the same transactional helpers", function()
+	local f = fixture({ "delegated_sword" })
+	assert(f.Service.AddStack(7, Ore, 5))
+	equal(assert(f.Service.RemoveStack(7, Ore, 2)), 3)
+	local viaTransaction = nil
+	f.PlayerData.Update(7, function(data)
+		viaTransaction = { f.Service.RemoveStackFromData(data, Ore, 1) }
+	end)
+	equal(viaTransaction[1], 2)
+	equal(f.Records[7].Inventory.Stacks[Ore], 2)
+
+	local sword = assert(f.Service.AddDiscreteItem(7, StarterSword))
+	equal(sword.InstanceId, "delegated_sword")
+	local direct = nil
+	f.PlayerData.Update(7, function(data)
+		direct = { f.Service.AddDiscreteItemToData(data, StarterSword) }
+	end)
+	local directItem = direct[1]
+	equal(directItem.DefinitionId, StarterSword)
+	assert(f.Records[7].Inventory.Items[directItem.InstanceId] ~= nil)
+	assert(directItem.InstanceId ~= sword.InstanceId)
+end)
+
 test("equipped discrete items cannot be removed", function()
 	local f = fixture({ "instance_sword" })
 	assert(f.Service.AddDiscreteItem(7, StarterSword))

@@ -137,6 +137,32 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		return nextAmount, nil
 	end
 
+	-- Trusted server compositions may use this inside one PlayerData.Update transaction.
+	function service.RemoveStackFromData(data: any, definitionId: string, amount: number): (number?, string?)
+		local _, definitionReason = definitionFor(definitionId, "Stackable")
+		if definitionReason then
+			return nil, definitionReason
+		end
+		if not validAmount(amount) then
+			return nil, "InvalidAmount"
+		end
+		local inventory = data.Inventory
+		if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
+			return nil, "InvalidInventory"
+		end
+		local current = inventory.Stacks[definitionId]
+		if not validAmount(current) or amount > current then
+			return nil, "InsufficientItems"
+		end
+		local nextAmount = current - amount
+		if nextAmount == 0 then
+			inventory.Stacks[definitionId] = nil
+		else
+			inventory.Stacks[definitionId] = nextAmount
+		end
+		return nextAmount, nil
+	end
+
 	function service.AddStack(userId: number, definitionId: string, amount: number): (number?, string?)
 		local _, definitionReason = definitionFor(definitionId, "Stackable")
 		if definitionReason then
@@ -173,32 +199,34 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		local result: number? = nil
 		local mutationReason: string? = nil
 		local ok, updateReason = playerData.Update(userId, function(data)
-			local inventory = data.Inventory
-			if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
-				mutationReason = "InvalidInventory"
-				return
-			end
-			local current = inventory and inventory.Stacks and inventory.Stacks[definitionId]
-			if not validAmount(current) then
-				mutationReason = "InsufficientItems"
-				return
-			end
-			if amount > current then
-				mutationReason = "InsufficientItems"
-				return
-			end
-			local nextAmount = current - amount
-			if nextAmount == 0 then
-				inventory.Stacks[definitionId] = nil
-			else
-				inventory.Stacks[definitionId] = nextAmount
-			end
-			result = nextAmount
+			result, mutationReason = service.RemoveStackFromData(data, definitionId, amount)
 		end)
 		if not ok then
 			return nil, updateReason or "PlayerDataUpdateFailed"
 		end
 		return result, mutationReason
+	end
+
+	-- Trusted server compositions may use this inside one PlayerData.Update transaction.
+	-- The sole source of discrete instance IDs: always Inventory's own runtime, never a caller-supplied value.
+	function service.AddDiscreteItemToData(data: any, definitionId: string): (DiscreteItem?, string?)
+		local _, definitionReason = definitionFor(definitionId, "Discrete")
+		if definitionReason then
+			return nil, definitionReason
+		end
+		local inventory = data.Inventory
+		if type(inventory) ~= "table" or type(inventory.Items) ~= "table" then
+			return nil, "InvalidInventory"
+		end
+		local generated, instanceId = pcall(runtime.NewInstanceId)
+		if not generated or type(instanceId) ~= "string" or instanceId == "" then
+			return nil, "InvalidGeneratedInstanceId"
+		end
+		if inventory.Items[instanceId] then
+			return nil, "InstanceIdCollision"
+		end
+		inventory.Items[instanceId] = { DefinitionId = definitionId }
+		return { InstanceId = instanceId, DefinitionId = definitionId }, nil
 	end
 
 	function service.AddDiscreteItem(userId: number, definitionId: string): (DiscreteItem?, string?)
@@ -209,24 +237,10 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"
 		end
-		local generated, instanceId = pcall(runtime.NewInstanceId)
-		if not generated or type(instanceId) ~= "string" or instanceId == "" then
-			return nil, "InvalidGeneratedInstanceId"
-		end
 		local result: DiscreteItem? = nil
 		local mutationReason: string? = nil
 		local ok, updateReason = playerData.Update(userId, function(data)
-			local inventory = data.Inventory
-			if type(inventory) ~= "table" or type(inventory.Items) ~= "table" then
-				mutationReason = "InvalidInventory"
-				return
-			end
-			if inventory.Items[instanceId] then
-				mutationReason = "InstanceIdCollision"
-				return
-			end
-			inventory.Items[instanceId] = { DefinitionId = definitionId }
-			result = { InstanceId = instanceId, DefinitionId = definitionId }
+			result, mutationReason = service.AddDiscreteItemToData(data, definitionId)
 		end)
 		if not ok then
 			return nil, updateReason or "PlayerDataUpdateFailed"
