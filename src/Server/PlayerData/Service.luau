@@ -27,6 +27,40 @@ function Service.New(store: Store.Backend, runtime: Runtime)
 	local started, stopping = false, false
 	local service = {}
 
+	-- Trusted server-side lifecycle seam: fired with only a userId, never mutable PlayerData, so
+	-- composition can safely react (e.g. run the offline-return claim) without a general event
+	-- framework. OnReady fires exactly once per successful load (including a player already
+	-- connected when Start() runs); OnUnavailable fires whenever that user's session stops being
+	-- usable (failed load, normal leave, or shutdown release) -- including when a player leaves
+	-- while still loading, in which case OnReady never fires for them at all.
+	local readyCallbacks: { (number) -> () } = {}
+	local unavailableCallbacks: { (number) -> () } = {}
+
+	local function subscribe(list: { (number) -> () }, callback: (number) -> ()): () -> ()
+		assert(type(callback) == "function", "PlayerData lifecycle callbacks must be functions")
+		table.insert(list, callback)
+		return function()
+			local index = table.find(list, callback)
+			if index then
+				table.remove(list, index)
+			end
+		end
+	end
+
+	local function fire(list: { (number) -> () }, userId: number)
+		for _, callback in list do
+			callback(userId)
+		end
+	end
+
+	function service.OnReady(callback: (number) -> ()): () -> ()
+		return subscribe(readyCallbacks, callback)
+	end
+
+	function service.OnUnavailable(callback: (number) -> ()): () -> ()
+		return subscribe(unavailableCallbacks, callback)
+	end
+
 	local function report(userId: number, operation: string, reason: string?)
 		runtime.Warn(("[PlayerData] %s failed for %d: %s"):format(operation, userId, reason or "Unknown"))
 	end
@@ -53,6 +87,7 @@ function Service.New(store: Store.Backend, runtime: Runtime)
 		if slots[slot.Player.UserId] == slot then
 			slots[slot.Player.UserId] = nil
 		end
+		fire(unavailableCallbacks, slot.Player.UserId)
 	end
 
 	local function join(player: any)
@@ -79,8 +114,11 @@ function Service.New(store: Store.Backend, runtime: Runtime)
 				if not slot.Closing then
 					player:Kick("Your data could not be loaded safely. Please rejoin shortly.")
 				end
+				fire(unavailableCallbacks, player.UserId)
 			elseif slot.Closing or stopping then
 				close(slot)
+			else
+				fire(readyCallbacks, player.UserId)
 			end
 		end)
 	end

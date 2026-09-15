@@ -231,4 +231,36 @@ test("stack and XP failures roll back the combined gathering transaction", funct
 	equal(f.Records[7].SkillXP[SkillIds.Mining], 6000)
 end)
 
+test("ValidateForBegin proves node/tool/level validity without awarding any ore or XP", function()
+	local f = fixture()
+	local before = copy(f.Records[7])
+	local ok = assert(f.Service.ValidateForBegin(7, IronNode))
+	equal(ok.NodeId, IronNode)
+	equal(ok.ToolInstanceId, "basic")
+	equal(ok.ToolDefinitionId, "tool_pickaxe_basic")
+	equal(f.Records[7].Inventory.Stacks[IronOre], before.Inventory.Stacks[IronOre])
+	equal(f.Records[7].SkillXP[SkillIds.Mining], before.SkillXP[SkillIds.Mining])
+	equal(f.PlayerData.Calls, 0)
+end)
+
+test("ValidateForBegin rejects exactly what GatherForElapsed would reject, via the same checks", function()
+	local f = fixture()
+	f.Records[7].Equipment[EquipmentSlots.Tool] = nil
+	local missing, missingReason = f.Service.ValidateForBegin(7, IronNode)
+	equal(missing, nil)
+	equal(missingReason, "NotEquipped")
+
+	f.Records[7].Equipment[EquipmentSlots.Tool] = "basic"
+	f.Nodes[IronNode].Eligible = false
+	local ineligible, ineligibleReason = f.Service.ValidateForBegin(7, IronNode)
+	equal(ineligible, nil)
+	equal(ineligibleReason, "IneligibleNode")
+
+	f.Nodes[IronNode].Eligible = true
+	f.Nodes[IronNode].Distance = GatheringDefinitions.ById[IronNode].MaximumRange + 0.01
+	local distant, distantReason = f.Service.ValidateForBegin(7, IronNode)
+	equal(distant, nil)
+	equal(distantReason, "NodeOutOfRange")
+end)
+
 print(("%d Gathering checks passed"):format(passed))

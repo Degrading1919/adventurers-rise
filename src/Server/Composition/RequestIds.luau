@@ -1,0 +1,35 @@
+--!strict
+
+-- Stable, centralized request IDs for the vertical-slice client/server request surface. Services
+-- never see these directly; only Composition's dispatch table and (eventually) the transport layer
+-- reference them, so no literal request-name strings are scattered through gameplay code.
+local ids: { [string]: string } = {
+	StateGet = "state_get",
+	EquipmentEquip = "equipment_equip",
+	EquipmentUnequip = "equipment_unequip",
+	EconomyPurchaseStack = "economy_purchase_stack",
+	EconomySellStack = "economy_sell_stack",
+	EconomyPurchaseDiscrete = "economy_purchase_discrete",
+	EconomySellDiscrete = "economy_sell_discrete",
+	PlotUpgradeStation = "plot_upgrade_station",
+	OfflineTrainingSetFocus = "offline_training_set_focus",
+	MasterySelectNode = "mastery_select_node",
+	MasteryRespec = "mastery_respec",
+	CraftingCraft = "crafting_craft",
+	AscensionAscend = "ascension_ascend",
+	CombatMeleeAttack = "combat_melee_attack",
+	GatheringBegin = "gathering_begin",
+	GatheringEnd = "gathering_end",
+	TrainingBegin = "training_begin",
+	TrainingEnd = "training_end",
+}
+
+local byId: { [string]: boolean } = {}
+for _, id in ids do
+	byId[id] = true
+end
+
+local RequestIds: { [string]: any } = table.clone(ids)
+RequestIds.ById = table.freeze(byId)
+
+return table.freeze(RequestIds)

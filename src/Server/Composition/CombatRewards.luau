@@ -1,0 +1,74 @@
+--!strict
+
+local EnemyDefinitions = require(script.Parent.Parent.Enemies.Definitions)
+
+-- Trusted composition seam associating a normal enemy's death-triggering attack with reward
+-- resolution, without turning the generic Enemy death record into a permanent "reward owner"
+-- object. Boss deaths are routed to the existing participation-based Bosses service instead.
+export type Combat = {
+	read ResolveMeleeAttack: (number, string) -> (any?, string?),
+}
+export type Enemies = {
+	read GetSnapshot: (string) -> (any?, string?),
+	read ConsumeDeath: (string) -> (any?, string?),
+}
+export type Economy = {
+	read CreditGold: (number, number) -> (number?, string?),
+}
+export type Bosses = {
+	read ResolveBossDeath: (string) -> (any?, string?),
+}
+
+local Service = {}
+
+function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> ())
+	assert(type(combat) == "table" and type(combat.ResolveMeleeAttack) == "function", "CombatRewards requires Combat")
+	assert(type(enemies) == "table" and type(enemies.GetSnapshot) == "function" and type(enemies.ConsumeDeath) == "function", "CombatRewards requires Enemies")
+	assert(type(economy) == "table" and type(economy.CreditGold) == "function", "CombatRewards requires Economy")
+	assert(type(bosses) == "table" and type(bosses.ResolveBossDeath) == "function", "CombatRewards requires Bosses")
+	assert(type(warn) == "function", "CombatRewards requires a warn sink")
+
+	local coordinator = {}
+
+	-- Runs unconditionally after every successful attack against the target, whether or not this
+	-- particular hit was lethal: Enemies.ConsumeDeath and Bosses.ResolveBossDeath are each
+	-- exactly-once by construction, so calling them speculatively on a target that is not (yet, or
+	-- no longer) dead is a cheap, safe no-op. This keeps normal-enemy Gold exactly-once per death
+	-- without composition re-deriving "was this the killing blow" itself.
+	function coordinator.ResolveMeleeAttack(userId: number, targetId: string): (any?, string?)
+		local result, reason = combat.ResolveMeleeAttack(userId, targetId)
+		if not result then
+			return nil, reason
+		end
+
+		local snapshot = enemies.GetSnapshot(targetId)
+		if snapshot then
+			local definition = EnemyDefinitions.ById[(snapshot :: any).DefinitionId]
+			if definition and definition.Boss then
+				-- Boss enemies never pass through the normal last-hit Gold path; participation
+				-- rewards remain entirely owned by Bosses.Service.
+				bosses.ResolveBossDeath(targetId)
+			else
+				local death = enemies.ConsumeDeath(targetId)
+				if death and (death :: any).GoldReward and (death :: any).GoldReward > 0 then
+					local _, goldReason = economy.CreditGold(userId, (death :: any).GoldReward)
+					if goldReason then
+						-- The death record is already consumed; a dead target becomes ineligible
+						-- for further attacks (Combat rejects it), so there is no retry path that
+						-- could duplicate this payout -- it is simply never granted. Surface that
+						-- to the caller as a failed request rather than silently reporting the
+						-- overall attack as a full success.
+						warn(("[CombatRewards] Gold credit failed for %d on %s: %s"):format(userId, targetId, goldReason))
+						return nil, goldReason or "GoldRewardFailed"
+					end
+				end
+			end
+		end
+
+		return result, nil
+	end
+
+	return table.freeze(coordinator)
+end
+
+return table.freeze(Service)
