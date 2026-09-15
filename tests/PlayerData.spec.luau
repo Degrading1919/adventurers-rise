@@ -59,13 +59,14 @@ local function versionOneData()
 	local data = Schema.New()
 	data.SchemaVersion = 1
 	data.Inventory = {}
+	data.MasteryRespecs = nil
 	return data
 end
 
-test("fresh v2 defaults have stable IDs, independent containers, and no derived levels", function()
+test("fresh v3 defaults have stable IDs, independent containers, and no derived levels", function()
 	local a, b = Schema.New(), Schema.New()
 	assert(Schema.Validate(a))
-	equal(a.SchemaVersion, 2)
+	equal(a.SchemaVersion, 3)
 	equal(a.Gold, 0)
 	equal(a.LastSessionAt, 0)
 	equal(a.Ascension.RankId, "ascension_adventurer")
@@ -75,6 +76,9 @@ test("fresh v2 defaults have stable IDs, independent containers, and no derived 
 		equal(a.SkillXP[id], 0)
 		a.MasterySelections[id].test_node = true
 		equal(next(b.MasterySelections[id]), nil)
+		equal(a.MasteryRespecs[id], false)
+		a.MasteryRespecs[id] = true
+		equal(b.MasteryRespecs[id], false)
 		count += 1
 	end
 	equal(count, 4)
@@ -102,6 +106,8 @@ test("schema rejects malformed and non-serializable saves", function()
 		function(d) d.Inventory.invalid = string.char(255) end,
 		function(d) setmetatable(d.Inventory, {}) end,
 		function(d) d.MasterySelections.skill_melee.test_node = 2 end,
+		function(d) d.MasteryRespecs.skill_melee = "yes" end,
+		function(d) d.MasteryRespecs.skill_unknown = true end,
 		function(d) d.Plot.Stations.test_station = false end,
 	} do
 		local data = Schema.New()
@@ -123,14 +129,15 @@ test("migrations run sequentially without mutating stored input", function()
 end)
 
 test("missing, invalid, unversioned, and future migrations fail closed", function()
-	local _, reason = Migrations.Run(Schema.New(), 3, {})
+	local target = Schema.Version + 1
+	local _, reason = Migrations.Run(Schema.New(), target, {})
 	equal(reason, "MissingMigration")
 	for _, step in {
 		function() error("bad migration") end,
 		function(d) return d end,
-		function(d) d.SchemaVersion = 4; return d end,
+		function(d) d.SchemaVersion = target + 1; return d end,
 	} do
-		local _, failure = Migrations.Run(Schema.New(), 3, { [2] = step })
+		local _, failure = Migrations.Run(Schema.New(), target, { [Schema.Version] = step })
 		equal(failure, "InvalidMigration")
 	end
 	local _, missing = Migrations.ToCurrent({ Gold = 20 })
@@ -141,21 +148,34 @@ test("missing, invalid, unversioned, and future migrations fail closed", functio
 	equal(future, "FutureVersion")
 end)
 
-test("real v1 to v2 migration creates explicit inventory containers", function()
+test("real v1 to current migration creates explicit inventory containers and Mastery respec history", function()
 	local raw = versionOneData()
 	raw.Gold = 50
 	local migrated = assert(Migrations.ToCurrent(raw))
-	equal(migrated.SchemaVersion, 2)
+	equal(migrated.SchemaVersion, 3)
 	equal(migrated.Gold, 50)
 	equal(next(migrated.Inventory.Stacks), nil)
 	equal(next(migrated.Inventory.Items), nil)
+	-- The v2 -> v3 migration must produce exactly the four skill IDs that existed when schema v3
+	-- was created, as literal historical constants -- never derived from the live SkillIds module
+	-- (which would silently change this migration's output whenever a skill is added later).
+	equal(migrated.MasteryRespecs.skill_melee, false)
+	equal(migrated.MasteryRespecs.skill_defense, false)
+	equal(migrated.MasteryRespecs.skill_mining, false)
+	equal(migrated.MasteryRespecs.skill_smithing, false)
+	local historicalKeyCount = 0
+	for _ in migrated.MasteryRespecs do
+		historicalKeyCount += 1
+	end
+	equal(historicalKeyCount, 4)
 	equal(raw.SchemaVersion, 1)
 	equal(next(raw.Inventory), nil)
+	equal(raw.MasteryRespecs, nil)
 	local f = fixture()
 	f.Records.player_7 = { Data = raw }
 	local session = assert(f.Store.Load(7))
-	equal(session.Data.SchemaVersion, 2)
-	equal(f.Records.player_7.Data.SchemaVersion, 2)
+	equal(session.Data.SchemaVersion, 3)
+	equal(f.Records.player_7.Data.SchemaVersion, 3)
 	assert(Schema.Validate(f.Records.player_7.Data))
 end)
 

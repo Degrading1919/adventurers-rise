@@ -16,8 +16,27 @@ local function migrateV1ToV2(data: any): any
 	return data
 end
 
+-- The exact skill IDs that existed when schema v3 was created. This must stay frozen to that
+-- historical moment -- never derived from the live SkillIds module or Schema.New() -- so this
+-- migration's output cannot silently change when later skills are added. A future skill's
+-- respec history is the responsibility of its own future migration, not this one.
+local SCHEMA_V3_SKILL_IDS = table.freeze({ "skill_melee", "skill_defense", "skill_mining", "skill_smithing" })
+
+-- Version 2 had no per-skill Mastery respec history. Every existing skill has never respecced,
+-- so its one-time free respec is still unused (false) for every save migrating through here.
+local function migrateV2ToV3(data: any): any
+	local masteryRespecs: { [string]: boolean } = {}
+	for _, id in SCHEMA_V3_SKILL_IDS do
+		masteryRespecs[id] = false
+	end
+	data.MasteryRespecs = masteryRespecs
+	data.SchemaVersion = 3
+	return data
+end
+
 local steps: { [number]: Step } = {
 	[1] = migrateV1ToV2,
+	[2] = migrateV2ToV3,
 }
 table.freeze(steps)
 
