@@ -5,6 +5,7 @@ local Definitions = require(script.Parent.Definitions)
 export type PlayerData = {
 	read GetSnapshot: (number) -> any?,
 	read Update: (number, (any) -> ()) -> (boolean, string?),
+	read Persist: (number) -> (boolean, string?),
 }
 export type SkillState = { Level: number, XP: number }
 export type Skills = {
@@ -56,7 +57,7 @@ local function finitePositive(value: any): boolean
 end
 
 function Service.New(playerData: PlayerData, skills: Skills, plots: Plots, clock: () -> number)
-	assert(type(playerData) == "table" and type(playerData.GetSnapshot) == "function" and type(playerData.Update) == "function", "OfflineTraining requires PlayerData")
+	assert(type(playerData) == "table" and type(playerData.GetSnapshot) == "function" and type(playerData.Update) == "function" and type(playerData.Persist) == "function", "OfflineTraining requires PlayerData")
 	assert(type(skills) == "table" and type(skills.AwardXPToData) == "function", "OfflineTraining requires Skills")
 	assert(type(plots) == "table" and type(plots.GetStationFromData) == "function", "OfflineTraining requires Plots")
 	assert(type(clock) == "function", "OfflineTraining requires a trusted server clock")
@@ -93,19 +94,24 @@ function Service.New(playerData: PlayerData, skills: Skills, plots: Plots, clock
 		return offline.FocusSkillId, nil
 	end
 
+	-- Derives both the focus and its station from one PlayerData snapshot, rather than one snapshot
+	-- per lookup, so the two can never observe two different moments of persisted state.
 	function service.GetFocusStation(userId: number): (StationState?, string?)
-		local focusSkillId, reason = service.GetFocus(userId)
-		if reason then
-			return nil, reason
-		end
-		if not focusSkillId then
-			return nil, "NoFocusSelected"
+		if not validUserId(userId) then
+			return nil, "InvalidUserId"
 		end
 		local data = playerData.GetSnapshot(userId)
 		if not data then
 			return nil, "NotReady"
 		end
-		local stationId = Definitions.StationIdBySkillId[focusSkillId]
+		local offline, offlineReason = offlineStateFor(data)
+		if not offline then
+			return nil, offlineReason
+		end
+		if offline.FocusSkillId == "" then
+			return nil, "NoFocusSelected"
+		end
+		local stationId = Definitions.StationIdBySkillId[offline.FocusSkillId]
 		if not stationId then
 			return nil, "UnsupportedFocusSkillId"
 		end
@@ -139,7 +145,30 @@ function Service.New(playerData: PlayerData, skills: Skills, plots: Plots, clock
 			if not offline then
 				abort(offlineReason or "InvalidOfflineTrainingState")
 			end
-			(offline :: any).FocusSkillId = skillId
+			local resolvedOffline = offline :: { FocusSkillId: string, ClaimedThroughAt: number }
+			-- Reselecting the same already-active focus is a no-op for the claim baseline: it must
+			-- not destroy legitimately accrued, still-unclaimed time. An actual change of focus
+			-- begins a new eligibility window from trusted "now" forward, so historical time (no
+			-- focus selected yet, or accrued under the previous focus) can never be retroactively
+			-- assigned to the newly selected skill.
+			if resolvedOffline.FocusSkillId ~= skillId then
+				if not finiteNonNegative(data.LastSessionAt) then
+					abort("InvalidLastSessionAt")
+				end
+				local now = clock()
+				if not finiteNonNegative(now) then
+					abort("InvalidClock")
+				end
+				local floor = math.max(data.LastSessionAt, resolvedOffline.ClaimedThroughAt)
+				if now < floor then
+					-- The trusted clock reports a time earlier than the existing claim baseline:
+					-- treat this as malformed/rollback timing state and fail closed rather than
+					-- risk reviving an already-excluded interval as newly claimable.
+					abort("InvalidClock")
+				end
+				resolvedOffline.ClaimedThroughAt = now
+			end
+			resolvedOffline.FocusSkillId = skillId
 			result = {
 				FocusSkillId = skillId,
 				StationId = stationId :: string,
@@ -258,6 +287,22 @@ function Service.New(playerData: PlayerData, skills: Skills, plots: Plots, clock
 		end)
 		if not ok then
 			return nil, mutationReason or updateReason or "PlayerDataUpdateFailed"
+		end
+		-- The in-memory mutation already committed inside playerData.Update. A real award must not
+		-- be reported to the caller as Rewarded = true until it is confirmed durable, since the live
+		-- session alone can be lost (crash, kill) before the next autosave. The award and the
+		-- advanced claim ratchet were written together by that one Update, so this single forced
+		-- Store write persists both together. On failure the in-memory state is deliberately left
+		-- exactly as-is (never rolled back, since an uncertain DataStore response could mean the
+		-- write actually landed) -- the claim ratchet already advanced, so this same live session
+		-- cannot re-claim or duplicate the award, and the next successful autosave/Persist still
+		-- carries it to durable storage.
+		if result and result.Rewarded then
+			local persisted, persistReason = playerData.Persist(userId)
+			if not persisted then
+				result.Rewarded = false
+				result.Reason = persistReason or "PersistenceFailed"
+			end
 		end
 		return result, mutationReason
 	end

@@ -31,6 +31,10 @@ def main():
         "SkillsService": root / "src/Server/Skills/Service.luau",
         "OfflineTrainingDefinitions": root / "src/Server/OfflineTraining/Definitions.luau",
         "OfflineTrainingService": root / "src/Server/OfflineTraining/Service.luau",
+        "PlayerDataSchema": root / "src/Server/PlayerData/Schema.luau",
+        "PlayerDataMigrations": root / "src/Server/PlayerData/Migrations.luau",
+        "PlayerDataStore": root / "src/Server/PlayerData/Store.luau",
+        "PlayerDataService": root / "src/Server/PlayerData/Service.luau",
     }
     wrappers = ["local loaders = {}"]
     for name, path in modules.items():
@@ -45,6 +49,9 @@ local scripts = {{
     SkillsService = {{ Parent = {{ Definitions = "SkillDefinitions" }} }},
     OfflineTrainingService = {{ Parent = {{ Definitions = "OfflineTrainingDefinitions" }} }},
     OfflineTrainingDefinitions = {{ Parent = {{ Parent = {{ Plots = {{ StationDefinitions = "StationDefinitions" }} }} }} }},
+    PlayerDataMigrations = {{ Parent = {{ Schema = "PlayerDataSchema" }} }},
+    PlayerDataStore = {{ Parent = {{ Schema = "PlayerDataSchema", Migrations = "PlayerDataMigrations" }} }},
+    PlayerDataService = {{ Parent = {{ Schema = "PlayerDataSchema", Store = "PlayerDataStore" }} }},
 }}
 local fakeGame = {{
     GetService = function(_, name)
@@ -87,6 +94,14 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Definitions)', 'require("./OfflineTrainingDefinitions")')
             elif name == "OfflineTrainingDefinitions":
                 source = source.replace('require(script.Parent.Parent.Plots.StationDefinitions)', 'require("./StationDefinitions")')
+            elif name == "PlayerDataMigrations":
+                source = source.replace('require(script.Parent.Schema)', 'require("./PlayerDataSchema")')
+            elif name == "PlayerDataStore":
+                source = source.replace('require(script.Parent.Schema)', 'require("./PlayerDataSchema")')
+                source = source.replace('require(script.Parent.Migrations)', 'require("./PlayerDataMigrations")')
+            elif name == "PlayerDataService":
+                source = source.replace('require(script.Parent.Schema)', 'require("./PlayerDataSchema")')
+                source = source.replace('require(script.Parent.Store)', 'require("./PlayerDataStore")')
             target = temporary / f"{name}.luau"
             target.write_text(source, encoding="utf-8")
             adapted.append(str(target))

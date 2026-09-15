@@ -7,6 +7,9 @@ local StationDefinitions = require("StationDefinitions")
 local Plots = require("PlotsService")
 local OfflineTrainingDefinitions = require("OfflineTrainingDefinitions")
 local OfflineTraining = require("OfflineTrainingService")
+local PlayerDataSchema = require("PlayerDataSchema")
+local PlayerDataStore = require("PlayerDataStore")
+local PlayerDataService = require("PlayerDataService")
 
 local MeleeStation = "station_training_melee"
 local DefenseStation = "station_training_defense"
@@ -60,7 +63,7 @@ local function fixture(config)
 			LastSessionAt = if config.LastSessionAt ~= nil then config.LastSessionAt else 0,
 		},
 	}
-	local playerData = { Calls = 0, FailReason = nil }
+	local playerData = { Calls = 0, FailReason = nil, PersistCalls = 0, PersistFailReason = nil }
 	function playerData.GetSnapshot(userId)
 		return if records[userId] then copy(records[userId]) else nil
 	end
@@ -78,6 +81,16 @@ local function fixture(config)
 			return false, "InvalidMutation"
 		end
 		records[userId] = candidate
+		return true, nil
+	end
+	function playerData.Persist(userId)
+		playerData.PersistCalls += 1
+		if playerData.PersistFailReason then
+			return false, playerData.PersistFailReason
+		end
+		if not records[userId] then
+			return false, "NotReady"
+		end
 		return true, nil
 	end
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
@@ -137,6 +150,98 @@ test("SetFocus fails closed on malformed persisted station state and preserves t
 	equal(f.Records[7].OfflineTraining.FocusSkillId, SkillIds.Melee)
 end)
 
+test("SetFocus establishes a new claim baseline so historical offline time cannot be retroactively assigned", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
+	f.Clock.Now = 1000 + 3 * 60 * 60 -- the player returns after hours with no focus ever selected
+	local focus = assert(f.Service.SetFocus(7, SkillIds.Melee))
+	equal(focus.FocusSkillId, SkillIds.Melee)
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, f.Clock.Now)
+	local result = assert(f.Service.ClaimOfflineReward(7))
+	equal(result.Rewarded, false)
+	equal(result.Reason, "ElapsedBelowThreshold")
+	equal(f.Records[7].SkillXP[SkillIds.Melee], 0)
+end)
+
+test("switching focus before claiming discards the prior focus's unclaimed interval", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
+	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1000 + 600 -- ten unclaimed minutes accrue under Melee
+	assert(f.Service.SetFocus(7, SkillIds.Defense)) -- switch away before ever claiming them
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 1600)
+	f.Clock.Now = 1600 + 300 -- only five new minutes pass under Defense
+	local result = assert(f.Service.ClaimOfflineReward(7))
+	equal(result.Rewarded, true)
+	equal(result.FocusSkillId, SkillIds.Defense)
+	equal(result.RawElapsedSeconds, 300) -- not 900; the Melee window is gone, not carried over
+	equal(f.Records[7].SkillXP[SkillIds.Melee], 0)
+	local station = StationDefinitions.ById[DefenseStation].Tiers[1]
+	local expectedXP = station.XPPerSecond * OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier * 300
+	equal(f.Records[7].SkillXP[SkillIds.Defense], expectedXP)
+end)
+
+test("reselecting the already-active focus is idempotent and preserves legitimately accrued time", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
+	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1000 + 600
+	local again = assert(f.Service.SetFocus(7, SkillIds.Melee))
+	equal(again.FocusSkillId, SkillIds.Melee)
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 1000) -- unchanged: same focus, no reset
+	local result = assert(f.Service.ClaimOfflineReward(7))
+	equal(result.Rewarded, true)
+	equal(result.RawElapsedSeconds, 600)
+end)
+
+test("SetFocus fails closed if the trusted clock appears to move backward relative to the existing claim baseline", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 2000 })
+	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 2000)
+	f.Clock.Now = 1500 -- the clock regressed relative to the existing baseline
+	local result, reason = f.Service.SetFocus(7, SkillIds.Defense)
+	equal(result, nil)
+	equal(reason, "InvalidClock")
+	equal(f.Records[7].OfflineTraining.FocusSkillId, SkillIds.Melee) -- unchanged: the whole mutation aborted
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 2000)
+end)
+
+test("a successful claim is not reported as Rewarded until it is confirmed durable, and a failed persist cannot be duplicated", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
+	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
+	f.PlayerData.PersistFailReason = "DataStoreUnavailable"
+	local result = assert(f.Service.ClaimOfflineReward(7))
+	equal(result.Rewarded, false)
+	equal(result.Reason, "DataStoreUnavailable")
+	local expectedXP = StationDefinitions.ById[MeleeStation].Tiers[1].XPPerSecond * OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier * 600
+	equal(result.XPAwarded, expectedXP)
+	-- The in-memory mutation still happened (so a later real persist would not lose it)...
+	equal(f.Records[7].SkillXP[SkillIds.Melee], expectedXP)
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 1600)
+	-- ...but the ratchet already advanced, so a repeated claim in the same live session cannot
+	-- duplicate the unconfirmed award.
+	f.PlayerData.PersistFailReason = nil
+	local second = assert(f.Service.ClaimOfflineReward(7))
+	equal(second.Rewarded, false)
+	equal(second.Reason, "ElapsedBelowThreshold")
+end)
+
+test("a confirmed durable claim reports Rewarded = true and forces the trusted persistence boundary", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
+	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
+	local before = f.PlayerData.PersistCalls
+	local result = assert(f.Service.ClaimOfflineReward(7))
+	equal(result.Rewarded, true)
+	assert(f.PlayerData.PersistCalls > before)
+end)
+
+test("non-reward claim outcomes never force a durable write", function()
+	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local before = f.PlayerData.PersistCalls
+	local result = assert(f.Service.ClaimOfflineReward(7))
+	equal(result.Reason, "NoFocusSelected")
+	equal(f.PlayerData.PersistCalls, before)
+end)
+
 test("GetFocusStation reuses the same active Plot/Training station rate, including after an upgrade", function()
 	local f = fixture()
 	assert(f.Service.SetFocus(7, SkillIds.Defense))
@@ -162,7 +267,9 @@ test("a fresh player with no prior session receives no fabricated offline XP", f
 	equal(result.Reason, "NoPriorSession")
 	equal(result.XPAwarded, 0)
 	equal(f.Records[7].SkillXP[SkillIds.Melee], 0)
-	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 0)
+	-- SetFocus still established a claim baseline at the moment it was called, even though this
+	-- player has never had a real prior session to measure offline time from.
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 10000)
 end)
 
 test("no offline focus selected yields a structured non-reward result without mutation", function()
@@ -193,7 +300,10 @@ end)
 
 test("a future session timestamp is rejected without awarding or mutating anything", function()
 	local f = fixture({ LastSessionAt = 5000, Now = 1000 })
-	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	-- A focus selected earlier under normal conditions, with LastSessionAt subsequently ending up
+	-- ahead of the trusted clock (clock skew): set directly, since SetFocus itself would now (and
+	-- correctly) refuse to run its own claim-baseline math against this same malformed timing state.
+	f.Records[7].OfflineTraining.FocusSkillId = SkillIds.Melee
 	local result = assert(f.Service.ClaimOfflineReward(7))
 	equal(result.Rewarded, false)
 	equal(result.Reason, "FutureSessionTimestamp")
@@ -202,8 +312,9 @@ test("a future session timestamp is rejected without awarding or mutating anythi
 end)
 
 test("offline training correctly awards Melee XP at the configured efficiency, strictly below active", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	local station = StationDefinitions.ById[MeleeStation].Tiers[1]
 	local efficiency = OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier
 	assert(efficiency < 1)
@@ -224,9 +335,10 @@ test("offline training correctly awards Melee XP at the configured efficiency, s
 end)
 
 test("offline training correctly awards Defense XP using the upgraded active station rate", function()
-	local f = fixture({ LastSessionAt = 2000, Now = 2900 })
+	local f = fixture({ LastSessionAt = 2000, Now = 2000 })
 	assert(f.Plots.UpgradeStation(7, DefenseStation))
 	assert(f.Service.SetFocus(7, SkillIds.Defense))
+	f.Clock.Now = 2900
 	local station = StationDefinitions.ById[DefenseStation].Tiers[2]
 	local efficiency = OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier
 	local result = assert(f.Service.ClaimOfflineReward(7))
@@ -238,8 +350,9 @@ test("offline training correctly awards Defense XP using the upgraded active sta
 end)
 
 test("fractional XP is preserved consistently with the existing Skills model", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1061 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1061
 	local result = assert(f.Service.ClaimOfflineReward(7))
 	equal(result.RawElapsedSeconds, 61)
 	local expectedXP = StationDefinitions.ById[MeleeStation].Tiers[1].XPPerSecond * OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier * 61
@@ -250,8 +363,9 @@ end)
 
 test("elapsed time above the offline cap is credited only up to the cap", function()
 	local cap = OfflineTrainingDefinitions.Configuration.MaximumOfflineSeconds
-	local f = fixture({ LastSessionAt = 1000, Now = 1000 + cap + 100000 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1000 + cap + 100000
 	local result = assert(f.Service.ClaimOfflineReward(7))
 	equal(result.Rewarded, true)
 	equal(result.RawElapsedSeconds, cap + 100000)
@@ -264,8 +378,9 @@ test("elapsed time above the offline cap is credited only up to the cap", functi
 end)
 
 test("the same offline interval cannot be claimed twice, including an immediate reconnect", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	local first = assert(f.Service.ClaimOfflineReward(7))
 	assert(first.Rewarded)
 	local xpAfterFirst = f.Records[7].SkillXP[SkillIds.Melee]
@@ -285,8 +400,9 @@ test("the same offline interval cannot be claimed twice, including an immediate 
 end)
 
 test("Skill XP cap behavior: an award that would exceed the cap is rejected without partial consumption", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	f.Records[7].SkillXP[SkillIds.Melee] = 50000 -- at the configured curve's MaximumXP
 	local before = copy(f.Records[7])
 	local result = assert(f.Service.ClaimOfflineReward(7))
@@ -299,8 +415,9 @@ test("Skill XP cap behavior: an award that would exceed the cap is rejected with
 end)
 
 test("offline training never grants Gold, items, equipment, or unrelated progression", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	local before = copy(f.Records[7])
 	assert(f.Service.ClaimOfflineReward(7))
 	equal(f.Records[7].Gold, before.Gold)
@@ -312,22 +429,24 @@ test("offline training never grants Gold, items, equipment, or unrelated progres
 end)
 
 test("a failed PlayerData mutation does not consume elapsed time or award anything", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	f.PlayerData.FailReason = "SimulatedFailure"
 	local result, reason = f.Service.ClaimOfflineReward(7)
 	equal(result, nil)
 	equal(reason, "SimulatedFailure")
 	equal(f.Records[7].SkillXP[SkillIds.Melee], 0)
-	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 0)
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 1000)
 	f.PlayerData.FailReason = nil
 	local retried = assert(f.Service.ClaimOfflineReward(7))
 	assert(retried.Rewarded)
 end)
 
 test("focus and claim state persist across a simulated leave and rejoin", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	assert(f.Service.ClaimOfflineReward(7))
 
 	-- A brand-new Skills/Plots/OfflineTraining composition bound to the same persisted records
@@ -372,19 +491,21 @@ test("malformed persisted OfflineTraining state fails closed", function()
 end)
 
 test("malformed persisted station/plot state fails closed rather than awarding offline XP", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	f.Records[7].Plot.Stations[MeleeStation] = { Tier = 99 }
 	local result, reason = f.Service.ClaimOfflineReward(7)
 	equal(result, nil)
 	equal(reason, "InvalidStationState")
 	equal(f.Records[7].SkillXP[SkillIds.Melee], 0)
-	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 0)
+	equal(f.Records[7].OfflineTraining.ClaimedThroughAt, 1000)
 end)
 
 test("returned results are copy-isolated from persisted state", function()
-	local f = fixture({ LastSessionAt = 1000, Now = 1600 })
+	local f = fixture({ LastSessionAt = 1000, Now = 1000 })
 	assert(f.Service.SetFocus(7, SkillIds.Melee))
+	f.Clock.Now = 1600
 	local result = assert(f.Service.ClaimOfflineReward(7))
 	result.XPAwarded = 999999
 	result.SkillState.XP = 999999
@@ -392,6 +513,149 @@ test("returned results are copy-isolated from persisted state", function()
 	station.XPPerSecond = 999999
 	assert(f.Records[7].SkillXP[SkillIds.Melee] ~= 999999)
 	equal(StationDefinitions.ById[MeleeStation].Tiers[1].XPPerSecond, 1)
+end)
+
+-- Integration harness wired against the real PlayerData Store/Service (not the plain-table mock
+-- above) so persistence and crash-recovery tests exercise the actual trusted transaction path.
+local function newBackend()
+	local f = { Time = 1000, Serial = 0, Records = {}, Failures = 0 }
+	function f:UpdateAsync(key, transform)
+		if self.Failures > 0 then
+			self.Failures -= 1
+			error("unavailable")
+		end
+		local info = { GetUserIds = function() return {} end, GetMetadata = function() return {} end }
+		local value = transform(PlayerDataSchema.Copy(self.Records[key]), info)
+		if value == nil then
+			return nil
+		end
+		self.Records[key] = PlayerDataSchema.Copy(value)
+		return PlayerDataSchema.Copy(value)
+	end
+	local backend = PlayerDataStore.New(f, {
+		Now = function() return math.floor(f.Time) end,
+		Sleep = function(seconds) f.Time += seconds end,
+		NewToken = function() f.Serial += 1; return "token_" .. f.Serial end,
+	})
+	return f, backend
+end
+
+local function newServerProcess(backend, f)
+	local function spawn(fn, ...)
+		local thread = coroutine.create(fn)
+		local ok, err = coroutine.resume(thread, ...)
+		assert(ok, err)
+		-- Anything that yields (the periodic autosave loop) is deliberately never resumed again:
+		-- this fixture only needs synchronous join/update/persist behavior, and an abandoned,
+		-- forever-parked autosave coroutine is exactly what models a crashed server process.
+	end
+	local function signal()
+		local handlers = {}
+		return {
+			Connect = function(_, handler) table.insert(handlers, handler) end,
+			Fire = function(_, ...) for _, handler in handlers do spawn(handler, ...) end end,
+		}
+	end
+	local players = { List = {}, PlayerAdded = signal(), PlayerRemoving = signal() }
+	function players:GetPlayers() return self.List end
+	local runtime = {
+		Players = players,
+		Spawn = spawn,
+		Wait = coroutine.yield,
+		Clock = function() return f.Time end,
+		Now = function() return math.floor(f.Time) end,
+		BindToClose = function() end,
+		Warn = function() end,
+	}
+	local service = PlayerDataService.New(backend, runtime)
+	return service, players
+end
+
+local function fakePlayer(id)
+	local p = { UserId = id, Kicked = false }
+	function p:Kick() self.Kicked = true end
+	return p
+end
+
+test("a durably-persisted offline claim survives a discarded live session; the reclaimed interval cannot be awarded twice", function()
+	local f, backend = newBackend()
+
+	-- Session A: selects a focus, has it durably confirmed, then the process is abandoned (crash) --
+	-- never Released, never told PlayerRemoving. The durable record still carries an open lease.
+	local serviceA, playersA = newServerProcess(backend, f)
+	serviceA.Start()
+	playersA.PlayerAdded:Fire(fakePlayer(7))
+	local skillsA = Skills.New(serviceA, { Curves = { curve_standard = curve() } })
+	local plotsA = Plots.New(serviceA, skillsA)
+	local offlineA = OfflineTraining.New(serviceA, skillsA, plotsA, function() return f.Time end)
+	assert(offlineA.SetFocus(7, SkillIds.Melee))
+	assert(serviceA.Persist(7))
+	equal(f.Records.player_7.Data.LastSessionAt, 1000)
+	equal(f.Records.player_7.Data.OfflineTraining.FocusSkillId, SkillIds.Melee)
+
+	f.Time += 1800 -- thirty minutes of real offline time pass while nothing is connected
+
+	-- Session B: a fresh server process reloads the same durable record once the crashed lease
+	-- has expired, without relying on any autosave or normal Release from session A.
+	local serviceB, playersB = newServerProcess(backend, f)
+	serviceB.Start()
+	playersB.PlayerAdded:Fire(fakePlayer(7))
+	assert(serviceB.GetSnapshot(7), "the expired crashed lease must not block a fresh load")
+	local skillsB = Skills.New(serviceB, { Curves = { curve_standard = curve() } })
+	local plotsB = Plots.New(serviceB, skillsB)
+	local offlineB = OfflineTraining.New(serviceB, skillsB, plotsB, function() return f.Time end)
+
+	equal(offlineB.GetFocus(7), SkillIds.Melee) -- the durably-confirmed focus survived the crash
+	local claim = assert(offlineB.ClaimOfflineReward(7))
+	assert(claim.Rewarded)
+	equal(claim.RawElapsedSeconds, 1800)
+	local expectedXP = StationDefinitions.ById[MeleeStation].Tiers[1].XPPerSecond * OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier * 1800
+	equal(claim.XPAwarded, expectedXP)
+	equal(serviceB.GetSnapshot(7).SkillXP[SkillIds.Melee], expectedXP)
+	equal(f.Records.player_7.Data.SkillXP[SkillIds.Melee], expectedXP) -- the award itself is durable
+	equal(f.Records.player_7.Data.OfflineTraining.ClaimedThroughAt, f.Time)
+
+	-- Reclaiming immediately in the same (still live) session B cannot award the original interval
+	-- a second time: the ratchet the claim itself persisted already excludes it.
+	local secondClaim = assert(offlineB.ClaimOfflineReward(7))
+	equal(secondClaim.Rewarded, false)
+	equal(secondClaim.Reason, "ElapsedBelowThreshold")
+	equal(serviceB.GetSnapshot(7).SkillXP[SkillIds.Melee], expectedXP)
+end)
+
+test("a forced-save failure during a claim fails closed without losing or duplicating the in-memory award", function()
+	local f, backend = newBackend()
+	local service, players = newServerProcess(backend, f)
+	service.Start()
+	players.PlayerAdded:Fire(fakePlayer(7))
+	local skills = Skills.New(service, { Curves = { curve_standard = curve() } })
+	local plots = Plots.New(service, skills)
+	local offline = OfflineTraining.New(service, skills, plots, function() return f.Time end)
+	assert(offline.SetFocus(7, SkillIds.Melee))
+	assert(service.Persist(7))
+	f.Time += 90 -- comfortably above the claim threshold, comfortably below the session lease
+	local claimedAt = f.Time -- captured before the retry sleeps below nudge the clock further
+
+	f.Failures = PlayerDataStore.Attempts
+	local claim = assert(offline.ClaimOfflineReward(7))
+	equal(claim.Rewarded, false)
+	equal(claim.Reason, "DataStoreUnavailable")
+	local expectedXP = StationDefinitions.ById[MeleeStation].Tiers[1].XPPerSecond * OfflineTrainingDefinitions.Configuration.EfficiencyMultiplier * 90
+	equal(claim.XPAwarded, expectedXP)
+	equal(service.GetSnapshot(7).SkillXP[SkillIds.Melee], expectedXP) -- not lost in memory
+	equal(service.GetSnapshot(7).OfflineTraining.ClaimedThroughAt, claimedAt)
+
+	-- The same live session cannot duplicate the award while it waits to be confirmed durable.
+	local retryClaim = assert(offline.ClaimOfflineReward(7))
+	equal(retryClaim.Rewarded, false)
+	equal(retryClaim.Reason, "ElapsedBelowThreshold")
+
+	-- Once the DataStore recovers, the very same in-memory state (award and ratchet together)
+	-- still reaches durable storage -- the failed forced persist silently dropped nothing.
+	f.Failures = 0
+	assert(service.Persist(7))
+	equal(f.Records.player_7.Data.SkillXP[SkillIds.Melee], expectedXP)
+	equal(f.Records.player_7.Data.OfflineTraining.ClaimedThroughAt, service.GetSnapshot(7).OfflineTraining.ClaimedThroughAt)
 end)
 
 print(("%d OfflineTraining checks passed"):format(passed))
