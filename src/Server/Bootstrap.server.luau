@@ -46,16 +46,27 @@ local worldAdapters = {
 
 local rng = Random.new()
 local composition = Composition.New(playerData, {
+	-- Monotonic process time for Combat cooldowns, request throttling, and active Gathering/
+	-- Training session timing -- never compared against a persisted epoch timestamp.
 	Clock = os.clock,
+	-- Wall/epoch time, the same domain PlayerData's Store stamps LastSessionAt with. This is the
+	-- only clock OfflineTraining may be constructed against.
+	Now = os.time,
 	NewInstanceId = function() return HttpService:GenerateGUID(false) end,
 	NewRuntimeId = function() return HttpService:GenerateGUID(false) end,
 	RollInteger = function(minimum: number, maximum: number) return rng:NextInteger(minimum, maximum) end,
 	Roll01 = function() return rng:NextNumber() end,
 	Warn = warn,
+	Spawn = function(callback, ...) task.spawn(callback, ...) end,
+	Wait = function(seconds) task.wait(seconds) end,
 }, worldAdapters)
 
-playerData.Start()
+-- Composition's PlayerData-ready/unavailable subscriptions (and its periodic-settlement
+-- heartbeat) must be registered before PlayerData.Start() begins loading any already-connected
+-- players, so a player present at boot still gets an observed ready event and the automatic
+-- offline-return claim.
 composition.Start()
+playerData.Start()
 
 -- The one trusted client/server request boundary (see Composition/RequestIds.luau for the stable
 -- request IDs). This callback does nothing but translate the server-provided Player into a userId

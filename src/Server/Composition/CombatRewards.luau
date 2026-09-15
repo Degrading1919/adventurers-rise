@@ -55,8 +55,11 @@ function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses:
 					if goldReason then
 						-- The death record is already consumed; a dead target becomes ineligible
 						-- for further attacks (Combat rejects it), so there is no retry path that
-						-- could duplicate this payout -- a failure here simply forfeits it.
+						-- could duplicate this payout -- it is simply never granted. Surface that
+						-- to the caller as a failed request rather than silently reporting the
+						-- overall attack as a full success.
 						warn(("[CombatRewards] Gold credit failed for %d on %s: %s"):format(userId, targetId, goldReason))
+						return nil, goldReason or "GoldRewardFailed"
 					end
 				end
 			end

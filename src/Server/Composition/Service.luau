@@ -34,12 +34,22 @@ export type PlayerData = {
 	read OnUnavailable: ((number) -> ()) -> (() -> ()),
 }
 export type Runtime = {
+	-- Monotonic process time, for short-lived runtime intervals only: Combat cooldowns, request
+	-- throttling, and active Gathering/Training session timing. Never compared against a persisted
+	-- epoch timestamp.
 	read Clock: () -> number,
+	-- Wall/epoch time, compatible with PlayerData's persisted LastSessionAt. The only clock
+	-- OfflineTraining may be constructed with.
+	read Now: () -> number,
 	read NewInstanceId: () -> string,
 	read NewRuntimeId: () -> string,
 	read RollInteger: (number, number) -> number,
 	read Roll01: () -> number,
 	read Warn: (string) -> (),
+	-- Trusted scheduling primitives for the shared periodic-settlement heartbeat (see Start()
+	-- below). Same shape as PlayerData.Runtime's Spawn/Wait.
+	read Spawn: ((...any) -> (), ...any) -> (),
+	read Wait: (number) -> (),
 }
 export type WorldAdapters = {
 	read CombatDistanceProvider: (number, any) -> (number?, string?),
@@ -55,6 +65,10 @@ export type RequestResult = {
 -- schema -- the same category of "small replaceable data" every *Definitions module already owns.
 local MELEE_XP_PER_SUCCESSFUL_HIT = 1
 local MINIMUM_REQUEST_INTERVAL_SECONDS = 0.05
+-- Provisional cadence for the shared periodic-settlement heartbeat (section 3): frequent enough
+-- that a session's rejected/re-validated interval stays small, not so frequent it becomes a
+-- per-player-per-frame loop -- one shared task settles every active session on each tick.
+local HEARTBEAT_INTERVAL_SECONDS = 1
 
 -- ClaimOfflineReward's Rewarded = false reasons that indicate the claim mechanism itself could not
 -- be trusted this time (a session/persistence problem), as opposed to a legitimate "nothing to
@@ -87,7 +101,14 @@ local Composition = {}
 
 function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters: WorldAdapters)
 	assert(type(playerData) == "table" and type(playerData.OnReady) == "function" and type(playerData.OnUnavailable) == "function", "Composition requires PlayerData with a ready lifecycle")
-	assert(type(runtime) == "table", "Composition requires a runtime")
+	assert(
+		type(runtime) == "table"
+			and type(runtime.Clock) == "function"
+			and type(runtime.Now) == "function"
+			and type(runtime.Spawn) == "function"
+			and type(runtime.Wait) == "function",
+		"Composition requires a runtime with separate monotonic Clock and wall-clock Now, plus Spawn/Wait"
+	)
 	assert(type(worldAdapters) == "table" and type(worldAdapters.CombatDistanceProvider) == "function" and type(worldAdapters.GatheringNodeResolver) == "function", "Composition requires injected world adapters")
 
 	-- Dependency order: PlayerData (given) -> Skills -> Inventory -> Equipment -> Economy ->
@@ -108,7 +129,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local ascension = AscensionService.New(playerData, skills)
 	local bosses = BossesService.New(playerData, enemies, economy, inventory, ascension, { Roll01 = runtime.Roll01 })
 	local mastery = MasteryService.New(playerData, skills, economy)
-	local offlineTraining = OfflineTrainingService.New(playerData, skills, plots, runtime.Clock)
+	-- OfflineTraining compares its elapsed window against PlayerData's persisted LastSessionAt
+	-- (stamped from wall/epoch time by Store), so it must be constructed with the wall clock
+	-- (runtime.Now), never the monotonic runtime.Clock used elsewhere in this composition.
+	local offlineTraining = OfflineTrainingService.New(playerData, skills, plots, runtime.Now)
 
 	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
 	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock)
@@ -178,6 +202,17 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	function composition.Start()
 		playerData.OnReady(onSessionReady)
 		playerData.OnUnavailable(onSessionUnavailable)
+
+		-- One small shared heartbeat settles every active Gathering/Training session, rather than
+		-- one infinite per-player task. Each settlement re-validates through the real
+		-- resolver/station-read path and only ever credits real elapsed monotonic time.
+		runtime.Spawn(function()
+			while true do
+				runtime.Wait(HEARTBEAT_INTERVAL_SECONDS)
+				gatheringSessions.SettleAllActive()
+				trainingSessions.SettleAllActive()
+			end
+		end)
 	end
 
 	type Handler = (number, any) -> (any?, string?)

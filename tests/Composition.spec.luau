@@ -8,6 +8,7 @@ local AscensionIds = require("AscensionIds")
 local ProgressionFlagIds = require("ProgressionFlagIds")
 local MasteryIds = require("MasteryIds")
 local SkillCurves = require("SkillCurves")
+local EconomyService = require("EconomyService")
 local PlayerDataSchema = require("PlayerDataSchema")
 local PlayerDataStore = require("PlayerDataStore")
 local PlayerDataService = require("PlayerDataService")
@@ -32,10 +33,33 @@ local function fakePlayer(id)
 	return p
 end
 
--- Builds one complete composed vertical-slice stack against a real (faked-DataStore) PlayerData
--- Store/Service, with configurable fake world adapters standing in for the Studio scene.
-local function fixture()
-	local f = { Time = 1000, Serial = 0, Records = {}, Failures = 0 }
+-- Deliberately different domains/magnitudes so a clock-domain mixup (e.g. OfflineTraining fed the
+-- monotonic clock, or Combat fed the wall clock) would visibly break tests rather than silently
+-- happening to work because both clocks started at the same number.
+local CLOCK_START = 100
+local WALL_START = 1758000000
+
+-- PlayerData only Releases a session when PlayerRemoving fires the SAME Player object instance
+-- that PlayerAdded reported (real Roblox Player objects persist identity for the connection's
+-- whole lifetime); this cache is what makes leavePlayer match join for the same user.
+local playerObjects: { [any]: { [number]: any } } = setmetatable({}, { __mode = "k" })
+local function playerObjectsFor(f: any, seed: { [number]: any }?)
+	local objects = playerObjects[f]
+	if not objects then
+		objects = seed or {}
+		playerObjects[f] = objects
+	end
+	return objects
+end
+
+-- Builds the raw PlayerData/Composition stack (fake DataStore, a real cooperative scheduler, and
+-- configurable fake world adapters) WITHOUT starting either service, so tests can control the
+-- Start() call order themselves (see the lifecycle-ordering test). `fixture()` below is the normal
+-- entry point that starts them in the correct order.
+local function buildStack(options: any?)
+	options = options or {}
+	local elapsed = 0
+	local f = { Serial = 0, Records = {}, Failures = 0 }
 	function f:UpdateAsync(key, transform)
 		if self.Failures > 0 then
 			self.Failures -= 1
@@ -49,17 +73,47 @@ local function fixture()
 		self.Records[key] = PlayerDataSchema.Copy(value)
 		return PlayerDataSchema.Copy(value)
 	end
+
+	local function wallNow() return math.floor(WALL_START + elapsed) end
+	local function monotonicClock() return CLOCK_START + elapsed end
+
 	local backend = PlayerDataStore.New(f, {
-		Now = function() return math.floor(f.Time) end,
-		Sleep = function(seconds) f.Time += seconds end,
+		Now = wallNow,
+		Sleep = function(seconds) elapsed += seconds end,
 		NewToken = function() f.Serial += 1; return "token_" .. f.Serial end,
 	})
 
+	-- A real cooperative scheduler (mirrors PlayerData.spec.luau's `lifecycle()`): Wait(seconds)
+	-- yields the current coroutine, parking it until `advance` resumes it at its wake time. This
+	-- is what lets the composition heartbeat (and PlayerData's own autosave loop) actually fire
+	-- during a test instead of running forever synchronously on the first Wait.
+	local queue: { { Thread: thread, At: number } } = {}
 	local function spawn(fn, ...)
 		local thread = coroutine.create(fn)
-		local ok, err = coroutine.resume(thread, ...)
-		assert(ok, err)
+		local ok, delay = coroutine.resume(thread, ...)
+		assert(ok, delay)
+		if coroutine.status(thread) ~= "dead" then
+			table.insert(queue, { Thread = thread, At = elapsed + (delay or 0) })
+		end
 	end
+	local function advance(seconds: number)
+		local target = elapsed + seconds
+		while true do
+			table.sort(queue, function(a, b) return a.At < b.At end)
+			if #queue == 0 or queue[1].At > target then
+				break
+			end
+			local entry = table.remove(queue, 1)
+			elapsed = entry.At
+			local ok, delay = coroutine.resume(entry.Thread)
+			assert(ok, delay)
+			if coroutine.status(entry.Thread) ~= "dead" then
+				table.insert(queue, { Thread = entry.Thread, At = elapsed + (delay or 0) })
+			end
+		end
+		elapsed = target
+	end
+
 	local function signal()
 		local handlers = {}
 		return {
@@ -73,12 +127,9 @@ local function fixture()
 	local playerData = PlayerDataService.New(backend, {
 		Players = players,
 		Spawn = spawn,
-		-- Must actually yield: PlayerData.Service.Start's autosave loop calls this in a `while not
-		-- stopping do` loop, and every spawned coroutine here runs to completion synchronously
-		-- (see `spawn` above). A no-op Wait would spin that loop forever instead of parking it.
 		Wait = coroutine.yield,
-		Clock = function() return f.Time end,
-		Now = function() return math.floor(f.Time) end,
+		Clock = monotonicClock,
+		Now = wallNow,
 		BindToClose = function() end,
 		Warn = function(message) table.insert(warnings, message) end,
 	})
@@ -108,40 +159,56 @@ local function fixture()
 	local instanceSerial = 0
 	local runtimeSerial = 0
 	local composition = Composition.New(playerData, {
-		Clock = function() return f.Time end,
+		Clock = monotonicClock,
+		Now = wallNow,
 		NewInstanceId = function() instanceSerial += 1; return "instance_" .. instanceSerial end,
 		NewRuntimeId = function() runtimeSerial += 1; return "runtime_" .. runtimeSerial end,
 		RollInteger = function(minimum: number, _maximum: number) return minimum end,
 		Roll01 = function() return roll01Value end,
 		Warn = function(message) table.insert(warnings, message) end,
+		Spawn = spawn,
+		Wait = coroutine.yield,
 	}, worldAdapters)
 
-	playerData.Start()
-	composition.Start()
-
-	-- Augment the same fake-DataStore table (it already carries the mutable .Time clock every
-	-- closure above captured by reference) rather than wrapping it, so `f.Time += N` in tests
-	-- actually advances the one clock everything reads.
 	f.PlayerData = playerData
 	f.Players = players
 	f.Composition = composition
 	f.CombatDistances = combatDistances
 	f.GatheringNodes = gatheringNodes
 	f.Warnings = warnings
+	f.Advance = advance
+	f.Clock = monotonicClock
+	f.Now = wallNow
+
+	-- PlayerData only Releases a session when PlayerRemoving fires the SAME Player object instance
+	-- that PlayerAdded reported; pre-joining here (before Start()) models "already connected when
+	-- the server starts" and registers those objects so leavePlayer can find them later.
+	local prejoined = options.PrejoinedUserIds or {}
+	if #prejoined > 0 then
+		local objects = {}
+		playerObjectsFor(f, objects)
+		for _, userId in prejoined do
+			local player = fakePlayer(userId)
+			objects[userId] = player
+			table.insert(players.List, player)
+		end
+	end
+
+	return f, playerData, composition
+end
+
+-- The normal entry point: builds the stack and starts Composition's PlayerData-ready lifecycle
+-- subscriptions (and its periodic-settlement heartbeat) before PlayerData.Start() begins loading
+-- any already-connected players, matching Bootstrap's required ordering.
+local function fixture(options: any?)
+	local f, playerData, composition = buildStack(options)
+	composition.Start()
+	playerData.Start()
 	return f
 end
 
--- PlayerData only Releases a session when PlayerRemoving fires the SAME Player object instance
--- that PlayerAdded reported (real Roblox Player objects persist identity for the connection's
--- whole lifetime); this cache is what makes leavePlayer below match join for the same user.
-local playerObjects: { [any]: { [number]: any } } = setmetatable({}, { __mode = "k" })
-
 local function joinPlayer(f, userId: number): boolean
-	local objects = playerObjects[f]
-	if not objects then
-		objects = {}
-		playerObjects[f] = objects
-	end
+	local objects = playerObjectsFor(f)
 	local player = fakePlayer(userId)
 	objects[userId] = player
 	f.Players.PlayerAdded:Fire(player)
@@ -149,8 +216,8 @@ local function joinPlayer(f, userId: number): boolean
 end
 
 local function leavePlayer(f, userId: number)
-	local objects = playerObjects[f]
-	local player = objects and objects[userId]
+	local objects = playerObjectsFor(f)
+	local player = objects[userId]
 	assert(player, "leavePlayer called before joinPlayer for this user")
 	f.Players.PlayerRemoving:Fire(player)
 end
@@ -210,6 +277,55 @@ test("the fail-closed placeholder world adapters report the missing Studio bound
 	equal(nodeReason, "WorldAdapterNotConfigured")
 end)
 
+-- ===== Clock-domain separation =====
+
+test("offline claims use wall time even though monotonic time has barely advanced, and Combat's cooldown uses monotonic time even though wall time is astronomically larger", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	assert(request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Melee }).Ok)
+	assert(f.Clock() < 1000, "monotonic domain should stay small")
+	assert(f.Now() > 1000000000, "wall domain should be epoch-scale")
+	leavePlayer(f, 7)
+	f.Advance(3600) -- one wall-clock hour; monotonic also only advances by 3600 seconds
+	joinPlayer(f, 7)
+	local state = assert(request(f, 7, RequestIds.StateGet, {}).Result)
+	assert(state.OfflineReturn.Rewarded, "offline progress must be measured in the wall-clock domain")
+	-- Combat's cooldown/target resolution must not be thrown off by the enormous wall-clock gap
+	-- that just passed -- it is keyed off the monotonic clock, which only moved by 3600 seconds.
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[enemy.RuntimeId] = 1
+	local attack = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId })
+	assert(attack.Ok, attack.Reason)
+end)
+
+test("no code compares OfflineTraining's persisted-epoch window against the monotonic clock: a fresh player's ClaimedThroughAt/LastSessionAt land in the wall-clock domain, not the monotonic one", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Melee }).Ok)
+	local data = assert(f.PlayerData.GetSnapshot(7))
+	assert(data.OfflineTraining.ClaimedThroughAt > 1000000000, "SetFocus's claim baseline must be stamped in the wall-clock domain")
+end)
+
+-- ===== PlayerData-ready lifecycle startup ordering =====
+
+test("Composition subscribes before PlayerData.Start begins loading, so an already-connected player's ready event and automatic offline processing are observed; the reverse order misses it", function()
+	local correct, correctPlayerData, correctComposition = buildStack({ PrejoinedUserIds = { 7 } })
+	correctComposition.Start()
+	correctPlayerData.Start()
+	equal(correctComposition.IsGameplayReady(7), true)
+	local state = assert(request(correct, 7, RequestIds.StateGet, {}).Result)
+	assert(state.OfflineReturn ~= nil, "the automatic offline-return claim must have run for the already-connected player")
+
+	-- Demonstrates why the order matters: starting PlayerData first means it has already iterated
+	-- and loaded the pre-connected player (firing OnReady to no one) before Composition ever
+	-- subscribes, so that player's ready event -- and gameplay readiness -- is missed entirely.
+	local reversed, reversedPlayerData, reversedComposition = buildStack({ PrejoinedUserIds = { 7 } })
+	reversedPlayerData.Start()
+	reversedComposition.Start()
+	equal(reversedComposition.IsGameplayReady(7), false)
+end)
+
 -- ===== Player-ready lifecycle and automatic offline return =====
 
 test("gameplay is locked until the session becomes ready, and the offline claim runs exactly once as part of that", function()
@@ -232,7 +348,7 @@ test("an offline focus selected before leaving is honored by the automatic claim
 	joinPlayer(f, 7)
 	assert(request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Melee }).Ok)
 	leavePlayer(f, 7)
-	f.Time += 3600
+	f.Advance(3600)
 	joinPlayer(f, 7)
 	local state = assert(request(f, 7, RequestIds.StateGet, {}).Result)
 	assert(state.OfflineReturn.Rewarded)
@@ -244,10 +360,10 @@ test("reading state does not mutate progression or re-run the offline claim", fu
 	joinPlayer(f, 7)
 	assert(request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Melee }).Ok)
 	leavePlayer(f, 7)
-	f.Time += 3600
+	f.Advance(3600)
 	joinPlayer(f, 7)
 	local first = assert(request(f, 7, RequestIds.StateGet, {}).Result)
-	f.Time += 1
+	f.Advance(1)
 	local second = assert(request(f, 7, RequestIds.StateGet, {}).Result)
 	equal(first.Skills[SkillIds.Melee].XP, second.Skills[SkillIds.Melee].XP)
 	equal(second.OfflineReturn.XPAwarded, first.OfflineReturn.XPAwarded)
@@ -283,7 +399,7 @@ test("malformed payloads fail closed", function()
 		{ RequestIds.CombatMeleeAttack, {} },
 		{ RequestIds.GatheringBegin, { NodeId = 5 } },
 	} do
-		f.Time += 1
+		f.Advance(1)
 		local result = request(f, 7, case[1], case[2])
 		equal(result.Ok, false)
 		equal(result.Reason, "MalformedPayload")
@@ -366,7 +482,7 @@ test("a normal Goblin's death pays its authoritative Gold exactly once", functio
 	for _ = 1, 3 do
 		local result = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId })
 		assert(result.Ok, result.Reason)
-		f.Time += 2
+		f.Advance(2)
 	end
 	local afterKill = assert(f.Composition.Services.Economy.GetGold(7))
 	equal(afterKill, before + enemy.GoldReward)
@@ -375,6 +491,34 @@ test("a normal Goblin's death pays its authoritative Gold exactly once", functio
 	equal(retry.Ok, false)
 	local afterRetry = assert(f.Composition.Services.Economy.GetGold(7))
 	equal(afterRetry, afterKill)
+end)
+
+test("a Gold-credit failure on the lethal hit surfaces as a failed request, never pays twice, and never touches the Boss path", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[enemy.RuntimeId] = 1
+	-- Two non-lethal hits first (MaxHealth 30, weapon damage 10).
+	for _ = 1, 2 do
+		assert(request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId }).Ok)
+		f.Advance(2)
+	end
+	-- Force the authoritative Gold credit itself to fail for the lethal third hit.
+	assert(f.PlayerData.Update(7, function(data) data.Gold = EconomyService.MaximumGold end))
+	local before = assert(f.Composition.Services.Economy.GetGold(7))
+	local lethal = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId })
+	equal(lethal.Ok, false)
+	local afterFailedKill = assert(f.Composition.Services.Economy.GetGold(7))
+	equal(afterFailedKill, before)
+	-- The death is already consumed and the target already dead/ineligible, so even once Gold is
+	-- no longer maxed, there is no path that pays it retroactively.
+	assert(f.PlayerData.Update(7, function(data) data.Gold = 0 end))
+	f.Advance(2)
+	local retry = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId })
+	equal(retry.Ok, false)
+	local finalGold = assert(f.Composition.Services.Economy.GetGold(7))
+	equal(finalGold, 0)
 end)
 
 -- ===== Boss integration =====
@@ -390,7 +534,7 @@ test("the Goblin Chieftain never pays through the normal Goblin reward path; par
 	for _ = 1, 40 do
 		local result = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = boss.RuntimeId })
 		assert(result.Ok, result.Reason)
-		f.Time += 2
+		f.Advance(2)
 	end
 	local goldAfter = assert(f.Composition.Services.Economy.GetGold(7))
 	equal(goldAfter, goldBefore + boss.GoldReward)
@@ -404,48 +548,87 @@ end)
 
 -- ===== Gathering timing =====
 
-test("gathering begins through the trusted world-adapter resolver and derives elapsed from the server clock, never a client value", function()
+test("Gathering Begin validates without awarding any ore or XP; zero elapsed after Begin awards nothing", function()
 	local f = fixture()
 	joinPlayer(f, 7)
 	grantPickaxe(f, 7)
 	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
-	local began = request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre, ElapsedSeconds = 999999 })
+	local began = request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre })
 	assert(began.Ok, began.Reason)
-	equal(began.Result.OreAmount, 1)
-	f.Time += 5
-	local ended = request(f, 7, RequestIds.GatheringEnd, { ElapsedSeconds = 999999 })
-	assert(ended.Ok, ended.Reason)
-	equal(ended.Result.OreAmount, 5)
-	local inventory = assert(f.Composition.Services.Inventory.GetSnapshot(7))
-	equal(inventory.Stacks.item_iron_ore, 6)
+	equal(began.Result.NodeId, GatheringNodeIds.IronOre)
+	equal(began.Result.ToolDefinitionId, "tool_pickaxe_basic")
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, nil)
+	local stopped = request(f, 7, RequestIds.GatheringEnd, {})
+	equal(stopped.Ok, false)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, nil)
 end)
 
-test("gathering re-validates the node on settlement; moving out of range fails closed and clears the session", function()
+test("Gathering Begin plus 5 real elapsed seconds credits exactly 5 seconds of progress", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantPickaxe(f, 7)
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
+	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
+	f.Advance(5)
+	request(f, 7, RequestIds.GatheringEnd, {}) -- likely already settled by the periodic heartbeat
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 5)
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Mining)).XP, 10)
+end)
+
+test("repeatedly calling Gathering Begin without advancing the clock never creates ore or XP", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantPickaxe(f, 7)
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
+	for _ = 1, 5 do
+		request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre })
+	end
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, nil)
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Mining)).XP, 0)
+end)
+
+test("repeatedly replacing a Gathering session cannot manufacture bonus seconds beyond real elapsed time", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantPickaxe(f, 7)
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
+	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
+	for _ = 1, 5 do
+		f.Advance(1)
+		assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
+	end
+	-- Exactly 5 real seconds passed in total, whether settled by the heartbeat or by each
+	-- replacing Begin -- replacing the session 5 times never creates more than that.
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 5)
+end)
+
+test("gathering re-validates the node on every periodic settlement; moving out of range fails closed and clears the session", function()
 	local f = fixture()
 	joinPlayer(f, 7)
 	grantPickaxe(f, 7)
 	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
 	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
 	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 999 }
-	f.Time += 5
+	f.Advance(5) -- the next heartbeat tick re-validates, fails, and clears the session
 	local ended = request(f, 7, RequestIds.GatheringEnd, {})
 	equal(ended.Ok, false)
-	f.Time += 1
-	local secondEnd = request(f, 7, RequestIds.GatheringEnd, {})
-	equal(secondEnd.Ok, false)
-	equal(secondEnd.Reason, "NoActiveGatheringSession")
+	equal(ended.Reason, "NoActiveGatheringSession")
 end)
 
-test("starting a new gathering session safely settles and replaces the previous one", function()
+test("long active sessions settle incrementally; a mid-session range loss is never retroactively recovered and total credited time never exceeds real elapsed time", function()
 	local f = fixture()
 	joinPlayer(f, 7)
 	grantPickaxe(f, 7)
 	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
 	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
-	f.Time += 4
-	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
-	local inventory = assert(f.Composition.Services.Inventory.GetSnapshot(7))
-	equal(inventory.Stacks.item_iron_ore, 6)
+	f.Advance(5) -- five separate 1-second heartbeat ticks, settled incrementally
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 5)
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 999 } -- moves out of range
+	f.Advance(5) -- the session is rejected and cleared on the very next tick; nothing more accrues
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 5)
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 } -- back in range
+	f.Advance(5) -- but the session is gone; nothing is retroactively recovered
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 5)
 end)
 
 test("leaving clears the active gathering session", function()
@@ -462,16 +645,37 @@ end)
 
 -- ===== Plot training timing =====
 
-test("training begins with a stable station ID and derives elapsed from the server clock, never a client value", function()
+test("Training Begin validates the station without awarding any XP; zero elapsed after Begin awards nothing", function()
 	local f = fixture()
 	joinPlayer(f, 7)
-	local began = request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee", ElapsedSeconds = 999999 })
+	local began = request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" })
 	assert(began.Ok, began.Reason)
-	f.Time += 5
-	local ended = request(f, 7, RequestIds.TrainingEnd, { ElapsedSeconds = 999999 })
-	assert(ended.Ok, ended.Reason)
-	local state = assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee))
-	equal(state.XP, 6)
+	equal(began.Result.StationId, "station_training_melee")
+	equal(began.Result.Tier, 1)
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 0)
+	local stopped = request(f, 7, RequestIds.TrainingEnd, {})
+	equal(stopped.Ok, false)
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 0)
+end)
+
+test("Training Begin plus 5 real elapsed seconds credits exactly 5 seconds of XP at the current tier rate", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
+	f.Advance(5)
+	request(f, 7, RequestIds.TrainingEnd, {})
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 5)
+end)
+
+test("Training sessions settle incrementally via the periodic heartbeat, not only at Stop", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
+	f.Advance(3)
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 3)
+	f.Advance(2)
+	request(f, 7, RequestIds.TrainingEnd, {})
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 5)
 end)
 
 test("upgrading a station changes the rate a later training session actually uses", function()
@@ -480,24 +684,41 @@ test("upgrading a station changes the rate a later training session actually use
 	assert(f.Composition.Services.Economy.CreditGold(7, 100))
 	assert(request(f, 7, RequestIds.PlotUpgradeStation, { StationId = "station_training_melee" }).Ok)
 	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
-	f.Time += 4
-	assert(request(f, 7, RequestIds.TrainingEnd, {}).Ok)
-	local state = assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee))
-	equal(state.XP, 10)
+	f.Advance(4)
+	request(f, 7, RequestIds.TrainingEnd, {})
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 8)
+end)
+
+test("repeatedly calling Training Begin without advancing the clock never creates XP", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	for _ = 1, 5 do
+		request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" })
+	end
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 0)
+end)
+
+test("repeatedly replacing a Training session cannot manufacture bonus seconds beyond real elapsed time", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
+	for _ = 1, 5 do
+		f.Advance(1)
+		assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
+	end
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 5)
 end)
 
 test("simultaneous incompatible training sessions are not allowed", function()
 	local f = fixture()
 	joinPlayer(f, 7)
 	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
-	f.Time += 3
+	f.Advance(3)
 	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_defense" }).Ok)
-	f.Time += 2
-	assert(request(f, 7, RequestIds.TrainingEnd, {}).Ok)
-	local melee = assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee))
-	local defense = assert(f.Composition.Services.Skills.GetState(7, SkillIds.Defense))
-	equal(melee.XP, 4)
-	equal(defense.XP, 3)
+	f.Advance(2)
+	request(f, 7, RequestIds.TrainingEnd, {})
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 3)
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Defense)).XP, 2)
 end)
 
 test("leaving clears the active training session", function()
@@ -518,7 +739,7 @@ test("Equipment: a valid Equip succeeds; an invalid slot fails", function()
 	local instanceId = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, "weapon_sword_starter")).InstanceId
 	local ok = request(f, 7, RequestIds.EquipmentEquip, { SlotId = EquipmentSlots.Weapon, InstanceId = instanceId })
 	assert(ok.Ok, ok.Reason)
-	f.Time += 1
+	f.Advance(1)
 	local bad = request(f, 7, RequestIds.EquipmentEquip, { SlotId = "not_a_slot", InstanceId = instanceId })
 	equal(bad.Ok, false)
 end)
@@ -529,7 +750,7 @@ test("Economy: a valid purchase succeeds; an unaffordable one fails", function()
 	assert(f.Composition.Services.Economy.CreditGold(7, 10))
 	local ok = request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 1 })
 	assert(ok.Ok, ok.Reason)
-	f.Time += 1
+	f.Advance(1)
 	local fail = request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 999999 })
 	equal(fail.Ok, false)
 end)
@@ -540,7 +761,7 @@ test("Crafting: a valid recipe craft succeeds; an unknown recipe fails", functio
 	assert(f.Composition.Services.Inventory.AddStack(7, "item_iron_ore", 2))
 	local ok = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar" })
 	assert(ok.Ok, ok.Reason)
-	f.Time += 1
+	f.Advance(1)
 	local fail = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_unknown" })
 	equal(fail.Ok, false)
 end)
@@ -552,7 +773,7 @@ test("Mastery: a valid node selection succeeds; an unmet node fails", function()
 	local firstNode = MasteryIds.Nodes.MeleeMight[1]
 	local ok = request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Melee, NodeId = firstNode })
 	assert(ok.Ok, ok.Reason)
-	f.Time += 1
+	f.Advance(1)
 	local secondNode = MasteryIds.Nodes.MeleeMight[2]
 	local fail = request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Melee, NodeId = secondNode })
 	equal(fail.Ok, false)
@@ -570,7 +791,7 @@ test("Ascension: Ascend fails until requirements are met, then succeeds", functi
 	assert(f.PlayerData.Update(7, function(data)
 		data.ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated] = true
 	end))
-	f.Time += 1
+	f.Advance(1)
 	local ok = request(f, 7, RequestIds.AscensionAscend, { RankId = AscensionIds.Adept })
 	assert(ok.Ok, ok.Reason)
 end)
@@ -600,7 +821,7 @@ test("returned read-model tables are copy-isolated", function()
 	local first = assert(request(f, 7, RequestIds.StateGet, {}).Result)
 	first.Gold = 999999
 	first.Skills[SkillIds.Melee].XP = 999999
-	f.Time += 1
+	f.Advance(1)
 	local second = assert(request(f, 7, RequestIds.StateGet, {}).Result)
 	assert(second.Gold ~= 999999)
 	assert(second.Skills[SkillIds.Melee].XP ~= 999999)
