@@ -21,10 +21,15 @@ export type Data = {
 	MasterySelections: { [string]: { [string]: boolean } },
 	-- Per-skill: true once that skill's one-time free Mastery respec has been consumed.
 	MasteryRespecs: { [string]: boolean },
+	-- FocusSkillId is "" when no offline training focus is selected. ClaimedThroughAt is an
+	-- in-session anti-double-claim ratchet (see Server/OfflineTraining/Service.luau) -- it never
+	-- competes with LastSessionAt as the primary offline-window authority; it only guards against
+	-- reclaiming the same interval before LastSessionAt itself next advances via autosave/release.
+	OfflineTraining: { FocusSkillId: string, ClaimedThroughAt: number },
 	LastSessionAt: number,
 }
 
-local Schema = { Version = 3, MaxDepth = 16 }
+local Schema = { Version = 4, MaxDepth = 16 }
 
 function Schema.New(): Data
 	local xp: { [string]: number } = {}
@@ -46,6 +51,7 @@ function Schema.New(): Data
 		ProgressionFlags = {},
 		MasterySelections = mastery,
 		MasteryRespecs = masteryRespecs,
+		OfflineTraining = { FocusSkillId = "", ClaimedThroughAt = 0 },
 		LastSessionAt = 0,
 	}
 end
@@ -154,6 +160,9 @@ function Schema.Validate(value: any): boolean
 		and dictionary(value.MasterySelections, flags)
 		and sameKeys(value.MasteryRespecs, defaults.MasteryRespecs)
 		and flags(value.MasteryRespecs)
+		and sameKeys(value.OfflineTraining, defaults.OfflineTraining)
+		and type(value.OfflineTraining.FocusSkillId) == "string"
+		and whole(value.OfflineTraining.ClaimedThroughAt)
 		and whole(value.LastSessionAt)
 end
 

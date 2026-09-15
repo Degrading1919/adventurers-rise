@@ -103,6 +103,17 @@ function Service.New(playerData: PlayerData, skills: Skills)
 		return stationStateFor(data, definition)
 	end
 
+	-- Trusted server compositions may use this inside one PlayerData.Update transaction (or
+	-- against a read-only snapshot) so callers reuse the same authoritative tier/rate resolution
+	-- Plot/Training owns, instead of duplicating it.
+	function service.GetStationFromData(data: any, stationId: string): (StationState?, string?)
+		local definition, definitionReason = definitionFor(stationId)
+		if not definition then
+			return nil, definitionReason
+		end
+		return stationStateFor(data, definition)
+	end
+
 	function service.UpgradeStation(userId: number, stationId: string): (StationState?, string?)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"

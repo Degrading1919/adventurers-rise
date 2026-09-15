@@ -122,6 +122,29 @@ function Service.New(store: Store.Backend, runtime: Runtime)
 		return true, nil
 	end
 
+	-- For trusted server systems that must confirm a prior Update is durable before reporting
+	-- success onward (e.g. an offline-reward claim). Forces the current in-memory session through
+	-- the same Store.Save path the autosave loop uses; Store continues to own the atomic record
+	-- write and the LastSessionAt stamp. Never expose this to clients.
+	function service.Persist(userId: number): (boolean, string?)
+		local session = ready(userId)
+		if not session then
+			return false, "NotReady"
+		end
+		local ok, reason = store.Save(session)
+		if not ok then
+			report(userId, "persist", reason)
+			if session.Closed then
+				local slot = slots[userId]
+				if slot and slot.Session == session then
+					slot.Player:Kick("Your data session ended. Please rejoin.")
+					runtime.Spawn(close, slot)
+				end
+			end
+		end
+		return ok, reason
+	end
+
 	function service.Start()
 		assert(not started, "PlayerData already started")
 		started = true
