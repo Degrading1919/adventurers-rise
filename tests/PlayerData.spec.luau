@@ -156,9 +156,18 @@ test("real v1 to current migration creates explicit inventory containers and Mas
 	equal(migrated.Gold, 50)
 	equal(next(migrated.Inventory.Stacks), nil)
 	equal(next(migrated.Inventory.Items), nil)
-	for _, id in SkillIds do
-		equal(migrated.MasteryRespecs[id], false)
+	-- The v2 -> v3 migration must produce exactly the four skill IDs that existed when schema v3
+	-- was created, as literal historical constants -- never derived from the live SkillIds module
+	-- (which would silently change this migration's output whenever a skill is added later).
+	equal(migrated.MasteryRespecs.skill_melee, false)
+	equal(migrated.MasteryRespecs.skill_defense, false)
+	equal(migrated.MasteryRespecs.skill_mining, false)
+	equal(migrated.MasteryRespecs.skill_smithing, false)
+	local historicalKeyCount = 0
+	for _ in migrated.MasteryRespecs do
+		historicalKeyCount += 1
 	end
+	equal(historicalKeyCount, 4)
 	equal(raw.SchemaVersion, 1)
 	equal(next(raw.Inventory), nil)
 	equal(raw.MasteryRespecs, nil)

@@ -129,6 +129,20 @@ function Service.New(playerData: PlayerData, skills: Skills, economy: Economy)
 		return history, nil
 	end
 
+	-- Fails closed unless the persisted history's value for this skill is actually a boolean;
+	-- missing/malformed history for a supported skill is never silently read as "unused".
+	local function usedFreeRespecFor(data: any, skillId: string): (boolean?, string?)
+		local history, reason = respecHistoryFor(data)
+		if not history then
+			return nil, reason
+		end
+		local used = history[skillId]
+		if type(used) ~= "boolean" then
+			return nil, "InvalidMasteryRespecState"
+		end
+		return used, nil
+	end
+
 	-- Structurally validates persisted selections (known nodes, correct skill, sequential
 	-- prerequisites, spent <= earned) and fails closed on any corruption. Returns the live
 	-- (uncoppied) selection table for trusted in-transaction mutation, plus its spent-point count.
@@ -235,13 +249,12 @@ function Service.New(playerData: PlayerData, skills: Skills, economy: Economy)
 		if not skillSelections then
 			return nil, selectionsReason
 		end
-		local history, historyReason = respecHistoryFor(data)
-		if not history then
+		local usedFreeRespec, historyReason = usedFreeRespecFor(data, skillId)
+		if usedFreeRespec == nil then
 			return nil, historyReason
 		end
 		local earned = earnedPointsForLevel(level)
 		local available = earned - (spent :: number)
-		local usedFreeRespec = history[skillId] == true
 
 		local branches: { BranchState } = {}
 		for _, branchDef in tree.Branches do
@@ -287,7 +300,9 @@ function Service.New(playerData: PlayerData, skills: Skills, economy: Economy)
 			AvailablePoints = available,
 			Branches = branches,
 			FreeRespecAvailable = not usedFreeRespec,
-			NextRespecGoldCost = if usedFreeRespec then Definitions.RespecGoldCost(spent :: number) else 0,
+			-- Nothing selected means a respec has nothing to do and would be rejected outright, so
+			-- never report a misleading payable cost for an empty tree.
+			NextRespecGoldCost = if usedFreeRespec and (spent :: number) > 0 then Definitions.RespecGoldCost(spent :: number) else 0,
 		}, nil
 	end
 
@@ -345,15 +360,26 @@ function Service.New(playerData: PlayerData, skills: Skills, economy: Economy)
 	end
 
 	function service.GetAvailablePoints(userId: number, skillId: string): (number?, string?)
-		local earned, earnedReason = service.GetEarnedPoints(userId, skillId)
-		if not earned then
-			return nil, earnedReason
+		if not validUserId(userId) then
+			return nil, "InvalidUserId"
 		end
-		local spent, spentReason = service.GetSpentPoints(userId, skillId)
+		local tree, treeReason = treeFor(skillId)
+		if not tree then
+			return nil, treeReason
+		end
+		local data = playerData.GetSnapshot(userId)
+		if not data then
+			return nil, "NotReady"
+		end
+		local skillState, skillReason = skills.GetStateFromData(data, skillId)
+		if not skillState then
+			return nil, skillReason
+		end
+		local _, spent, reason = validatedSelections(data, skillId, tree, skillState.Level)
 		if not spent then
-			return nil, spentReason
+			return nil, reason
 		end
-		return earned - spent, nil
+		return earnedPointsForLevel(skillState.Level) - (spent :: number), nil
 	end
 
 	function service.GetSelectedNodes(userId: number, skillId: string): ({ string }?, string?)
@@ -485,12 +511,20 @@ function Service.New(playerData: PlayerData, skills: Skills, economy: Economy)
 			if not skillSelections then
 				abort(selectionsReason or "InvalidMasteryState")
 			end
+			if (spent :: number) == 0 then
+				-- Nothing to clear: never consume the free respec, charge Gold, or touch history
+				-- for a meaningless operation.
+				abort("NoMasterySelections")
+			end
 			local history, historyReason = respecHistoryFor(data)
 			if not history then
 				abort(historyReason or "InvalidMasteryRespecState")
 			end
 			local resolvedHistory = history :: { [string]: boolean }
-			local alreadyUsedFree = resolvedHistory[skillId] == true
+			local alreadyUsedFree = resolvedHistory[skillId]
+			if type(alreadyUsedFree) ~= "boolean" then
+				abort("InvalidMasteryRespecState")
+			end
 			local goldCost = if alreadyUsedFree then Definitions.RespecGoldCost(spent :: number) else 0
 			if goldCost > 0 then
 				local _, goldReason = economy.DebitGoldToData(data, goldCost)
