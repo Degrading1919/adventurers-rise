@@ -1,6 +1,7 @@
 --!strict
 
 local Schema = require(script.Parent.Schema)
+local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
 
 export type Step = (any) -> any
 
@@ -16,8 +17,21 @@ local function migrateV1ToV2(data: any): any
 	return data
 end
 
+-- Version 2 had no per-skill Mastery respec history. Every existing skill has never respecced,
+-- so its one-time free respec is still unused (false) for every save migrating through here.
+local function migrateV2ToV3(data: any): any
+	local masteryRespecs: { [string]: boolean } = {}
+	for _, id in SkillIds do
+		masteryRespecs[id] = false
+	end
+	data.MasteryRespecs = masteryRespecs
+	data.SchemaVersion = 3
+	return data
+end
+
 local steps: { [number]: Step } = {
 	[1] = migrateV1ToV2,
+	[2] = migrateV2ToV3,
 }
 table.freeze(steps)
 

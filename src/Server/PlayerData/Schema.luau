@@ -19,17 +19,21 @@ export type Data = {
 	Plot: { Stations: { [string]: Record } },
 	ProgressionFlags: { [string]: boolean },
 	MasterySelections: { [string]: { [string]: boolean } },
+	-- Per-skill: true once that skill's one-time free Mastery respec has been consumed.
+	MasteryRespecs: { [string]: boolean },
 	LastSessionAt: number,
 }
 
-local Schema = { Version = 2, MaxDepth = 16 }
+local Schema = { Version = 3, MaxDepth = 16 }
 
 function Schema.New(): Data
 	local xp: { [string]: number } = {}
 	local mastery: { [string]: { [string]: boolean } } = {}
+	local masteryRespecs: { [string]: boolean } = {}
 	for _, id in SkillIds do
 		xp[id] = 0
 		mastery[id] = {}
+		masteryRespecs[id] = false
 	end
 	return {
 		SchemaVersion = Schema.Version,
@@ -41,6 +45,7 @@ function Schema.New(): Data
 		Plot = { Stations = {} },
 		ProgressionFlags = {},
 		MasterySelections = mastery,
+		MasteryRespecs = masteryRespecs,
 		LastSessionAt = 0,
 	}
 end
@@ -147,6 +152,8 @@ function Schema.Validate(value: any): boolean
 		and flags(value.ProgressionFlags)
 		and sameKeys(value.MasterySelections, defaults.MasterySelections)
 		and dictionary(value.MasterySelections, flags)
+		and sameKeys(value.MasteryRespecs, defaults.MasteryRespecs)
+		and flags(value.MasteryRespecs)
 		and whole(value.LastSessionAt)
 end
 
