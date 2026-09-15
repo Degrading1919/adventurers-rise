@@ -34,9 +34,18 @@ local function migrateV2ToV3(data: any): any
 	return data
 end
 
+-- Version 3 had no offline-training focus/claim state. Every migrating save starts with no
+-- selected focus and no prior claim -- this never fabricates historical offline progress.
+local function migrateV3ToV4(data: any): any
+	data.OfflineTraining = { FocusSkillId = "", ClaimedThroughAt = 0 }
+	data.SchemaVersion = 4
+	return data
+end
+
 local steps: { [number]: Step } = {
 	[1] = migrateV1ToV2,
 	[2] = migrateV2ToV3,
+	[3] = migrateV3ToV4,
 }
 table.freeze(steps)
 

@@ -236,4 +236,24 @@ test("training rejects invalid elapsed time and unavailable station state", func
 	equal(f.Records[7].SkillXP[SkillIds.Defense], 0)
 end)
 
+test("GetStationFromData reuses the same authoritative resolution inside a shared transaction", function()
+	local f = fixture()
+	local viaData = nil
+	f.PlayerData.Update(7, function(data)
+		viaData = { f.Service.GetStationFromData(data, MeleeStation) }
+	end)
+	equal(viaData[1].Tier, 1)
+	equal(viaData[1].XPPerSecond, 1)
+	assert(f.Service.UpgradeStation(7, MeleeStation))
+	local afterUpgrade = nil
+	f.PlayerData.Update(7, function(data)
+		afterUpgrade = { f.Service.GetStationFromData(data, MeleeStation) }
+	end)
+	equal(afterUpgrade[1].Tier, 2)
+	equal(afterUpgrade[1].XPPerSecond, 2)
+	local invalid, invalidReason = f.Service.GetStationFromData(f.Records[7], "station_unknown")
+	equal(invalid, nil)
+	equal(invalidReason, "InvalidStationId")
+end)
+
 print(("%d Plot/Training checks passed"):format(passed))

@@ -60,16 +60,21 @@ local function versionOneData()
 	data.SchemaVersion = 1
 	data.Inventory = {}
 	data.MasteryRespecs = nil
+	data.OfflineTraining = nil
 	return data
 end
 
-test("fresh v3 defaults have stable IDs, independent containers, and no derived levels", function()
+test("fresh v4 defaults have stable IDs, independent containers, and no derived levels", function()
 	local a, b = Schema.New(), Schema.New()
 	assert(Schema.Validate(a))
-	equal(a.SchemaVersion, 3)
+	equal(a.SchemaVersion, 4)
 	equal(a.Gold, 0)
 	equal(a.LastSessionAt, 0)
 	equal(a.Ascension.RankId, "ascension_adventurer")
+	equal(a.OfflineTraining.FocusSkillId, "")
+	equal(a.OfflineTraining.ClaimedThroughAt, 0)
+	a.OfflineTraining.FocusSkillId = "skill_melee"
+	equal(b.OfflineTraining.FocusSkillId, "")
 	local count = 0
 	for name, id in SkillIds do
 		equal(id, "skill_" .. string.lower(name))
@@ -108,6 +113,10 @@ test("schema rejects malformed and non-serializable saves", function()
 		function(d) d.MasterySelections.skill_melee.test_node = 2 end,
 		function(d) d.MasteryRespecs.skill_melee = "yes" end,
 		function(d) d.MasteryRespecs.skill_unknown = true end,
+		function(d) d.OfflineTraining.FocusSkillId = 1 end,
+		function(d) d.OfflineTraining.ClaimedThroughAt = -1 end,
+		function(d) d.OfflineTraining.ClaimedThroughAt = 0.5 end,
+		function(d) d.OfflineTraining.extra = true end,
 		function(d) d.Plot.Stations.test_station = false end,
 	} do
 		local data = Schema.New()
@@ -148,11 +157,11 @@ test("missing, invalid, unversioned, and future migrations fail closed", functio
 	equal(future, "FutureVersion")
 end)
 
-test("real v1 to current migration creates explicit inventory containers and Mastery respec history", function()
+test("real v1 to current migration creates explicit inventory containers, Mastery respec history, and offline-training state", function()
 	local raw = versionOneData()
 	raw.Gold = 50
 	local migrated = assert(Migrations.ToCurrent(raw))
-	equal(migrated.SchemaVersion, 3)
+	equal(migrated.SchemaVersion, 4)
 	equal(migrated.Gold, 50)
 	equal(next(migrated.Inventory.Stacks), nil)
 	equal(next(migrated.Inventory.Items), nil)
@@ -168,14 +177,19 @@ test("real v1 to current migration creates explicit inventory containers and Mas
 		historicalKeyCount += 1
 	end
 	equal(historicalKeyCount, 4)
+	-- The v3 -> v4 migration never fabricates historical offline progress: no focus selected and
+	-- no prior claim window, for every migrating save regardless of its real LastSessionAt.
+	equal(migrated.OfflineTraining.FocusSkillId, "")
+	equal(migrated.OfflineTraining.ClaimedThroughAt, 0)
 	equal(raw.SchemaVersion, 1)
 	equal(next(raw.Inventory), nil)
 	equal(raw.MasteryRespecs, nil)
+	equal(raw.OfflineTraining, nil)
 	local f = fixture()
 	f.Records.player_7 = { Data = raw }
 	local session = assert(f.Store.Load(7))
-	equal(session.Data.SchemaVersion, 3)
-	equal(f.Records.player_7.Data.SchemaVersion, 3)
+	equal(session.Data.SchemaVersion, 4)
+	equal(f.Records.player_7.Data.SchemaVersion, 4)
 	assert(Schema.Validate(f.Records.player_7.Data))
 end)
 
