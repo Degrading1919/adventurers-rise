@@ -12,7 +12,7 @@ local EconomyService = require("EconomyService")
 local PlayerDataSchema = require("PlayerDataSchema")
 local PlayerDataStore = require("PlayerDataStore")
 local PlayerDataService = require("PlayerDataService")
-local RequestIds = require("CompositionRequestIds")
+local RequestIds = require("RequestIds")
 local CompositionWorldAdapters = require("CompositionWorldAdapters")
 local Composition = require("CompositionService")
 

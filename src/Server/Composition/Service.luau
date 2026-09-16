@@ -20,7 +20,7 @@ local AscensionService = require(script.Parent.Parent.Ascension.Service)
 local MasteryService = require(script.Parent.Parent.Mastery.Service)
 local OfflineTrainingService = require(script.Parent.Parent.OfflineTraining.Service)
 
-local RequestIds = require(script.Parent.RequestIds)
+local RequestIds = require(game:GetService("ReplicatedStorage").Shared.RequestIds)
 local GatheringSessions = require(script.Parent.GatheringSessions)
 local TrainingSessions = require(script.Parent.TrainingSessions)
 local CombatRewards = require(script.Parent.CombatRewards)
