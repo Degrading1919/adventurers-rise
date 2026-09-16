@@ -5,6 +5,8 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local DataStoreService = game:GetService("DataStoreService")
+local CollectionService = game:GetService("CollectionService")
+local Workspace = game:GetService("Workspace")
 
 local shared = ReplicatedStorage:WaitForChild("Shared", 10)
 assert(shared, "Missing ReplicatedStorage.Shared; check Script Sync mapping.")
@@ -16,7 +18,7 @@ local Project = require(projectModule)
 local Store = require(script.Parent.PlayerData.Store)
 local PlayerDataService = require(script.Parent.PlayerData.Service)
 local Composition = require(script.Parent.Composition.Service)
-local WorldAdapters = require(script.Parent.Composition.WorldAdapters)
+local World = require(script.Parent.World.Service)
 
 local storeName = if RunService:IsStudio() then "AdventurersRise_PlayerData_Development" else "AdventurersRise_PlayerData"
 local store = Store.New(DataStoreService:GetDataStore(storeName), {
@@ -34,14 +36,23 @@ local playerData = PlayerDataService.New(store, {
 	Warn = warn,
 })
 
--- Combat and Gathering both require real physical-world information (attacker/target distance,
--- node eligibility) that this repository-only task cannot truthfully provide -- that is Studio-
--- context work for a later task. These placeholders satisfy Composition's injected contract while
--- clearly failing closed (never fabricating a fake target/node) until the real Studio-side
--- adapters are implemented and wired in here.
+-- Combat and Gathering both require real physical-world information (attacker/target distance and
+-- gathering-node resolution) that only the live Studio scene can answer. The World module reads that
+-- scene server-side and binds physical enemy instances to repository Enemy runtime IDs. It owns no
+-- gameplay outcome -- health, damage, Gold, and progression stay in the repository services; the
+-- injected adapters below only report physical positions and instance identity.
+local world = World.New({
+	Players = Players,
+	Workspace = Workspace,
+	Collection = CollectionService,
+	Clock = os.clock,
+	Warn = warn,
+	Spawn = function(callback, ...) task.spawn(callback, ...) end,
+	Wait = function(seconds) task.wait(seconds) end,
+})
 local worldAdapters = {
-	CombatDistanceProvider = WorldAdapters.FailClosedCombatDistanceProvider(),
-	GatheringNodeResolver = WorldAdapters.FailClosedGatheringNodeResolver(),
+	CombatDistanceProvider = world.CombatDistanceProvider,
+	GatheringNodeResolver = world.GatheringNodeResolver,
 }
 
 local rng = Random.new()
@@ -67,6 +78,20 @@ local composition = Composition.New(playerData, {
 -- offline-return claim.
 composition.Start()
 playerData.Start()
+
+-- Bind the physical scene to repository Enemy runtime state: spawn the provisional Goblins and the
+-- shared Chieftain at their tagged markers, map each physical instance to a repository runtime ID,
+-- and run the minimal death/respawn behavior needed to validate the loop. Enemies is the authority;
+-- the physical models are only its presentation.
+world.Start(composition.Services.Enemies)
+
+-- Studio-only diagnostic seam so MCP-driven verification can exercise the real server-authoritative
+-- request path and seed a test player through the real services. Guarded to Studio, so it never
+-- exists in a live server, and it exposes only the same composition/world already constructed above
+-- -- it introduces no second gameplay authority.
+if RunService:IsStudio() then
+	_G.__AdventurersRiseServer = { Composition = composition, World = world }
+end
 
 -- The one trusted client/server request boundary (see Composition/RequestIds.luau for the stable
 -- request IDs). This callback does nothing but translate the server-provided Player into a userId
