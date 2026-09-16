@@ -100,6 +100,18 @@ function Service.New(runtime: Runtime)
 		return root.Position, nil
 	end
 
+	-- Only tagged instances that live under Workspace count as physical world content. A tagged
+	-- template or definition parked elsewhere in the DataModel (ServerStorage, ReplicatedStorage, a
+	-- disconnected instance, ...) must never resolve as a real gathering node or enemy spawn marker.
+	local function isWorldContent(instance: Instance): boolean
+		return instance:IsDescendantOf(runtime.Workspace)
+	end
+
+	local function enemyLabelText(definitionId: string, level: any): string
+		local displayName = if definitionId == "enemy_goblin_chieftain" then "Goblin Chieftain" else "Goblin"
+		return displayName .. " Lv" .. tostring(level)
+	end
+
 	-- CombatDistanceProvider: (attackerUserId, enemyState) -> (distance, reason). Eligibility (Alive)
 	-- is intentionally NOT decided here -- the repository Enemies combat resolver derives Eligible from
 	-- authoritative Alive state. This function only reports the true physical distance between the
@@ -133,7 +145,7 @@ function Service.New(runtime: Runtime)
 		end
 		local nearest: number? = nil
 		for _, instance in runtime.Collection:GetTagged(GATHERING_NODE_TAG) do
-			if instance:IsA("BasePart") and instance.Parent and instance:GetAttribute(ATTR_GATHERING_NODE_ID) == nodeId then
+			if instance:IsA("BasePart") and isWorldContent(instance) and instance:GetAttribute(ATTR_GATHERING_NODE_ID) == nodeId then
 				local distance = (position - instance.Position).Magnitude
 				if nearest == nil or distance < nearest then
 					nearest = distance
@@ -175,7 +187,7 @@ function Service.New(runtime: Runtime)
 		label.TextColor3 = Color3.fromRGB(255, 255, 255)
 		label.TextStrokeTransparency = 0
 		label.TextScaled = true
-		label.Text = (if isBoss then "Goblin Chieftain" else "Goblin") .. " Lv" .. tostring(state.Level)
+		label.Text = enemyLabelText(definitionId, state.Level)
 		label.Parent = billboard
 
 		model:SetAttribute(ATTR_ENEMY_DEFINITION_ID, definitionId)
@@ -196,6 +208,12 @@ function Service.New(runtime: Runtime)
 		local body = record.Model.PrimaryPart
 		if body then
 			body.Transparency = 0
+			-- A respawn may roll a new level, so refresh the visible billboard label to match.
+			local billboard = body:FindFirstChild("Label")
+			local label = billboard and billboard:FindFirstChildOfClass("TextLabel")
+			if label then
+				label.Text = enemyLabelText(record.DefinitionId, state.Level)
+			end
 		end
 	end
 
@@ -258,7 +276,7 @@ function Service.New(runtime: Runtime)
 		end
 
 		for _, marker in runtime.Collection:GetTagged(ENEMY_SPAWN_TAG) do
-			if marker:IsA("BasePart") then
+			if marker:IsA("BasePart") and isWorldContent(marker) then
 				local definitionId = marker:GetAttribute(ATTR_ENEMY_DEFINITION_ID)
 				if type(definitionId) ~= "string" or definitionId == "" then
 					runtime.Warn(("[World] Enemy spawn marker %s has no %s attribute"):format(marker:GetFullName(), ATTR_ENEMY_DEFINITION_ID))
