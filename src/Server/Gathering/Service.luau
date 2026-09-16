@@ -6,6 +6,7 @@ local ItemDefinitions = require(Shared.ItemDefinitions)
 local Definitions = require(script.Parent.Definitions)
 
 export type PlayerData = {
+	read GetSnapshot: (number) -> any?,
 	read Update: (number, (any) -> ()) -> (boolean, string?),
 }
 export type Equipment = {
@@ -34,6 +35,16 @@ export type Result = {
 	MiningXP: number,
 	MiningState: any,
 }
+export type ToolInfo = {
+	ToolInstanceId: string,
+	ToolDefinitionId: string,
+	Mining: any,
+}
+export type ValidateResult = {
+	NodeId: string,
+	ToolInstanceId: string,
+	ToolDefinitionId: string,
+}
 
 local Service = { MaximumElapsedSeconds = 60 }
 
@@ -58,7 +69,7 @@ local function validMiningTool(data: any): boolean
 end
 
 function Service.New(playerData: PlayerData, equipment: Equipment, inventory: Inventory, skills: Skills, resolveNode: NodeResolver)
-	assert(type(playerData) == "table" and type(playerData.Update) == "function", "Gathering requires PlayerData")
+	assert(type(playerData) == "table" and type(playerData.GetSnapshot) == "function" and type(playerData.Update) == "function", "Gathering requires PlayerData")
 	assert(type(equipment) == "table" and type(equipment.GetEquippedItem) == "function", "Gathering requires Equipment")
 	assert(type(inventory) == "table" and type(inventory.AddStackToData) == "function", "Gathering requires Inventory")
 	assert(type(skills) == "table" and type(skills.GetStateFromData) == "function" and type(skills.AwardXPToData) == "function", "Gathering requires Skills")
@@ -79,6 +90,82 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		return definition, nil
 	end
 
+	-- The one place node/range/eligibility/equipped-Tool validation lives. Used both by
+	-- GatherForElapsed (before its PlayerData.Update transaction, as before) and by
+	-- ValidateForBegin (a read-only pre-check for a trusted session coordinator's Begin request),
+	-- so neither duplicates the other's world/equipment checks.
+	local function validateEligibility(userId: number, nodeId: string, definition: Definitions.Definition): (Node?, ToolInfo?, string?)
+		local node, nodeReason = resolveNode(userId, nodeId)
+		if not node then
+			return nil, nil, nodeReason or "InvalidNode"
+		end
+		if node.Id ~= nodeId or not finiteNonNegative(node.Distance) then
+			return nil, nil, "InvalidNode"
+		end
+		if node.Eligible ~= true then
+			return nil, nil, "IneligibleNode"
+		end
+		if node.Distance > definition.MaximumRange then
+			return nil, nil, "NodeOutOfRange"
+		end
+
+		local equipped, equippedReason = equipment.GetEquippedItem(userId, EquipmentSlots.Tool)
+		if type(equipped) ~= "table" then
+			return nil, nil, equippedReason or "NoMiningTool"
+		end
+		local instanceId = equipped.InstanceId
+		local definitionId = equipped.DefinitionId
+		if type(instanceId) ~= "string" or instanceId == "" or type(definitionId) ~= "string" or definitionId == "" then
+			return nil, nil, "InvalidEquipment"
+		end
+		local toolDefinition = ItemDefinitions.ById[definitionId]
+		local mining = if toolDefinition then toolDefinition.Mining else nil
+		if not toolDefinition or toolDefinition.Kind ~= "Discrete" or not toolDefinition.Equipment or toolDefinition.Equipment.SlotId ~= EquipmentSlots.Tool or not mining or not validMiningTool(mining) then
+			return nil, nil, "InvalidMiningTool"
+		end
+		return node, { ToolInstanceId = instanceId :: string, ToolDefinitionId = definitionId :: string, Mining = mining }, nil
+	end
+
+	-- The one place the Mining-level requirement is checked, against whatever `data` the caller
+	-- provides -- the live transactional snapshot for GatherForElapsed, or a read-only
+	-- GetSnapshot copy for ValidateForBegin.
+	local function validateMiningLevel(data: any, definition: Definitions.Definition): (any?, string?)
+		local miningState, stateReason = skills.GetStateFromData(data, definition.SkillId)
+		if not miningState then
+			return nil, stateReason
+		end
+		if miningState.Level < definition.RequiredMiningLevel then
+			return nil, "InsufficientMiningLevel"
+		end
+		return miningState, nil
+	end
+
+	-- Trusted, non-mutating pre-check for a session coordinator's Begin request: proves the node,
+	-- range, eligibility, equipped tool, and Mining level are all currently valid without awarding
+	-- any ore or XP. Reuses exactly the same validation the real award path uses.
+	function service.ValidateForBegin(userId: number, nodeId: string): (ValidateResult?, string?)
+		if not validUserId(userId) then
+			return nil, "InvalidUserId"
+		end
+		local definition, definitionReason = definitionFor(nodeId)
+		if not definition then
+			return nil, definitionReason
+		end
+		local data = playerData.GetSnapshot(userId)
+		if not data then
+			return nil, "NotReady"
+		end
+		local miningState, levelReason = validateMiningLevel(data, definition)
+		if not miningState then
+			return nil, levelReason
+		end
+		local _node, toolInfo, validateReason = validateEligibility(userId, nodeId, definition)
+		if not toolInfo then
+			return nil, validateReason
+		end
+		return { NodeId = definition.Id, ToolInstanceId = toolInfo.ToolInstanceId, ToolDefinitionId = toolInfo.ToolDefinitionId }, nil
+	end
+
 	function service.GatherForElapsed(userId: number, nodeId: string, elapsedSeconds: number): (Result?, string?)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"
@@ -90,36 +177,13 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		if not finitePositive(elapsedSeconds) or elapsedSeconds > Service.MaximumElapsedSeconds then
 			return nil, "InvalidElapsedSeconds"
 		end
-		local node, nodeReason = resolveNode(userId, nodeId)
-		if not node then
-			return nil, nodeReason or "InvalidNode"
+		local _node, toolInfo, validateReason = validateEligibility(userId, nodeId, definition)
+		if not toolInfo then
+			return nil, validateReason
 		end
-		if node.Id ~= nodeId or not finiteNonNegative(node.Distance) then
-			return nil, "InvalidNode"
-		end
-		if node.Eligible ~= true then
-			return nil, "IneligibleNode"
-		end
-		if node.Distance > definition.MaximumRange then
-			return nil, "NodeOutOfRange"
-		end
-
-		local equipped, equippedReason = equipment.GetEquippedItem(userId, EquipmentSlots.Tool)
-		if type(equipped) ~= "table" then
-			return nil, equippedReason or "NoMiningTool"
-		end
-		local instanceId = equipped.InstanceId
-		local definitionId = equipped.DefinitionId
-		if type(instanceId) ~= "string" or instanceId == "" or type(definitionId) ~= "string" or definitionId == "" then
-			return nil, "InvalidEquipment"
-		end
-		local toolInstanceId: string = instanceId
-		local toolDefinitionId: string = definitionId
-		local toolDefinition = ItemDefinitions.ById[definitionId]
-		local mining = if toolDefinition then toolDefinition.Mining else nil
-		if not toolDefinition or toolDefinition.Kind ~= "Discrete" or not toolDefinition.Equipment or toolDefinition.Equipment.SlotId ~= EquipmentSlots.Tool or not mining or not validMiningTool(mining) then
-			return nil, "InvalidMiningTool"
-		end
+		local mining = toolInfo.Mining
+		local toolInstanceId = toolInfo.ToolInstanceId
+		local toolDefinitionId = toolInfo.ToolDefinitionId
 
 		local oreAmount = math.floor(definition.OrePerSecond * mining.GatheringRateMultiplier * elapsedSeconds)
 		local miningXP = definition.MiningXPPerSecond * mining.GatheringRateMultiplier * elapsedSeconds
@@ -134,12 +198,9 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 			error(reason, 0)
 		end
 		local ok, updateReason = playerData.Update(userId, function(data)
-			local miningState, stateReason = skills.GetStateFromData(data, definition.SkillId)
+			local miningState, stateReason = validateMiningLevel(data, definition)
 			if not miningState then
 				abort(stateReason or "InvalidMiningState")
-			end
-			if miningState.Level < definition.RequiredMiningLevel then
-				abort("InsufficientMiningLevel")
 			end
 			local totalOre, inventoryReason = inventory.AddStackToData(data, definition.OutputItemId, oreAmount)
 			if type(totalOre) ~= "number" then
