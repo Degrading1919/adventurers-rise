@@ -111,6 +111,36 @@ test("a respec clearing MaxHealthBonus removes it immediately and clamps current
 	equal(state.Health, 100)
 end)
 
+test("a reduced maximum persists the clamp so hidden health cannot reappear when Fortitude is re-selected", function()
+	local bonus = 0.10
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { MaxHealthBonus = bonus } end)
+	assert(s.Reset(7)) -- stored 110 at the boosted maximum
+	equal(assert(s.GetState(7)).Health, 110)
+	-- Respec removes the node; a read now (as the read-model poll does every tick) clamps the authoritative
+	-- runtime value to 100 -- not merely the returned snapshot.
+	bonus = 0
+	equal(assert(s.GetState(7)).Health, 100)
+	-- Re-selecting Fortitude raises the maximum again, but the 10 health hidden above the reduced maximum
+	-- is gone for good -- it does not resurface.
+	bonus = 0.10
+	local restored = assert(s.GetState(7))
+	equal(restored.MaxHealth, 110)
+	equal(restored.Health, 100)
+	-- The clamp also holds through the damage path (uses the same persisted value).
+	equal(assert(s.ApplyDamage(7, 10)).Health, 90)
+end)
+
+test("the clamp persists even when the only read before re-selection is a damage application", function()
+	local bonus = 0.10
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { MaxHealthBonus = bonus } end)
+	assert(s.Reset(7)) -- stored 110
+	bonus = 0 -- respec, no GetState in between
+	-- ApplyDamage observes the reduced max, clamps 110 -> 100 first, then applies 40 -> 60.
+	equal(assert(s.ApplyDamage(7, 40)).Health, 60)
+	bonus = 0.10 -- re-select: the hidden 10 must not come back (60, not 70)
+	equal(assert(s.GetState(7)).Health, 60)
+end)
+
 test("spoofed or non-numeric Defense modifier values contribute no MaxHealth bonus", function()
 	local s = PlayerHealth.New({ MaxHealth = 100 }, function()
 		-- A string is not a trusted number; unrelated keys are ignored; a negative never lowers the base.

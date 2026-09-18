@@ -6,6 +6,7 @@
 export type Gathering = {
 	read GatherForElapsed: (number, string, number) -> (any?, string?),
 	read ValidateForBegin: (number, string) -> (any?, string?),
+	read ResetCarry: (number) -> (),
 }
 
 export type Coordinator = {
@@ -23,7 +24,7 @@ local function validUserId(value: any): boolean
 end
 
 function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock: () -> number): Coordinator
-	assert(type(gathering) == "table" and type(gathering.GatherForElapsed) == "function" and type(gathering.ValidateForBegin) == "function", "GatheringSessions requires Gathering")
+	assert(type(gathering) == "table" and type(gathering.GatherForElapsed) == "function" and type(gathering.ValidateForBegin) == "function" and type(gathering.ResetCarry) == "function", "GatheringSessions requires Gathering")
 	assert(type(maximumElapsedSeconds) == "number" and maximumElapsedSeconds > 0, "GatheringSessions requires a positive chunk boundary")
 	assert(type(clock) == "function", "GatheringSessions requires a trusted server clock")
 
@@ -32,6 +33,7 @@ function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock:
 
 	function coordinator.Clear(userId: number)
 		sessions[userId] = nil
+		gathering.ResetCarry(userId)
 	end
 
 	-- Called by Composition's shared heartbeat, never per-player: settles every currently active
@@ -111,6 +113,8 @@ function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock:
 			return nil, reason
 		end
 		sessions[userId] = { NodeId = nodeId, LastSettledAt = clock() }
+		-- A fresh session starts with no inherited fractional ore (any prior session was settled above).
+		gathering.ResetCarry(userId)
 		return info, nil
 	end
 
@@ -122,7 +126,9 @@ function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock:
 			return nil, "NoActiveGatheringSession"
 		end
 		local result, reason = coordinator.Settle(userId)
-		sessions[userId] = nil
+		-- Settle above committed any final whole ore (threading the carry); Clear then drops the session
+		-- and its sub-unit remainder.
+		coordinator.Clear(userId)
 		return result, reason
 	end
 

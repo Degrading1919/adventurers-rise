@@ -99,6 +99,14 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		return {}
 	end
 
+	-- Server-owned fractional ore remainder per user, carried between settlements of one continuous
+	-- gathering session (the coordinator resets it when a session begins or ends). It is always in
+	-- [0, 1), never persisted, and never sourced from or exposed to the client. Threading it makes
+	-- cumulative ore a pure floor of cumulative (rate * elapsed), so many short settlements yield the
+	-- same total as one long settlement -- the small real Mastery rate bonuses are no longer lost to
+	-- per-settlement flooring at ~1s heartbeat chunk sizes.
+	local oreCarry: { [number]: number } = {}
+
 	local service = {}
 
 	local function definitionFor(nodeId: any): (Definitions.Definition?, string?)
@@ -216,9 +224,16 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		local speedMultiplier = 1 + math.max(0, modifierTotal(miningModifierTotals, "GatheringSpeedBonus"))
 		local yieldMultiplier = 1 + math.max(0, modifierTotal(miningModifierTotals, "PrimaryYieldBonus"))
 
-		local oreAmount = math.floor(definition.OrePerSecond * mining.GatheringRateMultiplier * elapsedSeconds * speedMultiplier * yieldMultiplier)
+		-- Exact fractional ore this settlement earns, plus the remainder carried from earlier settlements
+		-- of this session. Flooring the running total (rather than each settlement independently) is what
+		-- makes the result chunk-size independent and deterministic.
+		local exactOre = definition.OrePerSecond * mining.GatheringRateMultiplier * elapsedSeconds * speedMultiplier * yieldMultiplier
+		local availableOre = exactOre + (oreCarry[userId] or 0)
+		local oreAmount = math.floor(availableOre)
 		local miningXP = definition.MiningXPPerSecond * mining.GatheringRateMultiplier * elapsedSeconds * speedMultiplier
 		if oreAmount < 1 or oreAmount > 9007199254740991 or not finitePositive(miningXP) then
+			-- Less than one whole unit has accumulated even with the carry. Defer (the coordinator keeps
+			-- the unspent time and retries next tick) and leave the carry untouched, so nothing is lost.
 			return nil, "GatheringIntervalTooShort"
 		end
 
@@ -256,7 +271,17 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		if not ok then
 			return nil, mutationReason or updateReason or "PlayerDataUpdateFailed"
 		end
+		-- Only now that the whole ore is committed do we consume it from the running total, keeping the
+		-- sub-unit remainder for the next settlement. A failed/rolled-back settlement leaves carry intact.
+		oreCarry[userId] = availableOre - oreAmount
 		return result, mutationReason
+	end
+
+	-- Clears a user's fractional ore carry. The session coordinator calls this when a continuous
+	-- gathering session begins or ends, so carry never leaks across sessions and disconnected players
+	-- leave none behind. Dropping an in-progress carry only ever forfeits a sub-unit fraction of ore.
+	function service.ResetCarry(userId: number)
+		oreCarry[userId] = nil
 	end
 
 	return table.freeze(service)

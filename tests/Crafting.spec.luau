@@ -242,7 +242,12 @@ end)
 
 -- ===== Smithing Mastery: MaterialEfficiencyBonus (ProcessingSpeedBonus is intentionally inert) =====
 -- The fixture injects a provider standing in for Mastery.GetModifiers(...Smithing) read from the same
--- transaction. The Iron Bar recipe consumes 2 Iron Ore; effective cost = max(1, ceil(2 * (1 - eff))).
+-- transaction. Effective cost per input = max(1, ceil(amount * (1 - eff))) -- a SAFE rounding that never
+-- yields a free/negative craft and never grants more discount than earned. IMPORTANT: at the real
+-- configured Forgemaster values (+0.02 per node, +0.10 for a full branch) this rounds to NO change on
+-- the slice's 2- and 3-unit single recipes; a whole unit is only saved once eff >= 1/amount. Meaningful
+-- realization is therefore blocked on the already-required batch-crafting work. The two synthetic tests
+-- below use above-configured efficiencies purely to prove the mechanism is wired for larger batches.
 
 test("no Smithing selections consume the recipe's full material cost", function()
 	local f = fixture(nil, function() return {} end)
@@ -250,14 +255,30 @@ test("no Smithing selections consume the recipe's full material cost", function(
 	equal(f.Records[7].Inventory.Stacks[IronOre], 8) -- 10 - 2
 end)
 
-test("MaterialEfficiencyBonus reduces material consumption per the defined formula", function()
+test("the configured Forgemaster values cannot yet reduce a single 2- or 3-unit craft (blocked on batch crafting)", function()
+	-- Real Mastery values: +0.02 per node up to +0.10 for a full Forgemaster branch. On the 2-ore Bar
+	-- recipe and 3-bar Sword recipe these round to no change (eff would need to reach 1/amount).
+	for _, eff in { 0.02, 0.10 } do
+		local bar = fixture(nil, function() return { MaterialEfficiencyBonus = eff } end)
+		assert(bar.Service.Craft(7, IronBarRecipe))
+		equal(bar.Records[7].Inventory.Stacks[IronOre], 8) -- full 2 consumed, no discount realized
+
+		local sword = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = eff } end)
+		sword.Records[7].Inventory.Stacks[IronBar] = 3
+		assert(sword.Service.Craft(7, SwordRecipe))
+		equal(sword.Records[7].Inventory.Stacks[IronBar], nil) -- full 3 consumed
+	end
+end)
+
+test("the efficiency formula does reduce consumption once the saving crosses a whole unit (forward-compatible)", function()
+	-- Above-configured efficiency, standing in for a future batch that multiplies the effective quantity.
 	local f = fixture(nil, function() return { MaterialEfficiencyBonus = 0.5 } end)
 	assert(f.Service.Craft(7, IronBarRecipe))
 	equal(f.Records[7].Inventory.Stacks[IronOre], 9) -- max(1, ceil(2 * 0.5)) == 1 consumed
 	equal(f.Records[7].Inventory.Stacks[IronBar], 1) -- output still produced
 end)
 
-test("MaterialEfficiencyBonus reduces a multi-unit recipe's consumption too", function()
+test("the efficiency formula reduces a multi-unit recipe's consumption once the saving crosses a whole unit", function()
 	local f = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = 0.5 } end)
 	f.Records[7].Inventory.Stacks[IronBar] = 3
 	assert(f.Service.Craft(7, SwordRecipe))

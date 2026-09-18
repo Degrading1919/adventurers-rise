@@ -73,11 +73,17 @@ function Service.New(configuration: Configuration, defenseModifiers: DefenseModi
 	local service = {}
 
 	-- Reads current health, clamped down to the player's current maximum so a Mastery respec that lowers
-	-- MaxHealthBonus can never leave a player reading above their (now smaller) maximum.
+	-- MaxHealthBonus can never leave a player reading above their (now smaller) maximum. The clamp is
+	-- persisted to the authoritative runtime value (not just this returned snapshot), so health hidden
+	-- above a reduced maximum is truly discarded and cannot reappear if Fortitude is re-selected later.
 	local function currentHealth(userId: number): number
 		local max = resolveMaxHealth(userId)
 		local value = health[userId]
-		if value == nil or value > max then
+		if value == nil then
+			return max
+		end
+		if value > max then
+			health[userId] = max
 			return max
 		end
 		return value

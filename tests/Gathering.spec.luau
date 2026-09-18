@@ -331,4 +331,65 @@ test("a non-function Mining modifier provider is rejected", function()
 	equal(ok, false)
 end)
 
+-- ===== Deterministic fractional ore across settlements, using the REAL configured Mastery values =====
+-- Base rate is 1 ore/s (Iron Ore 1 ore/s x basic pickaxe 1). The real per-node bonus is +0.02 and a
+-- fully completed branch is +0.10. Flooring each ~1s settlement independently used to discard that
+-- fraction entirely; a server-owned carry now makes cumulative ore a pure floor of cumulative
+-- rate*elapsed, so repeated short settlements realize the same total as one equivalent long settlement.
+
+local function repeatedOre(bonus, seconds, chunk)
+	local f = fixture(function()
+		return bonus
+	end)
+	local total = 0
+	local remaining = seconds
+	while remaining > 0 do
+		local this = math.min(chunk, remaining)
+		total += assert(f.Service.GatherForElapsed(7, IronNode, this)).OreAmount
+		remaining -= this
+	end
+	return total
+end
+
+local function oneShotOre(bonus, seconds)
+	return assert(fixture(function()
+		return bonus
+	end).Service.GatherForElapsed(7, IronNode, seconds)).OreAmount
+end
+
+test("real +10% GatheringSpeedBonus: 15x1s realizes the +1 extra ore and matches one 15s settlement", function()
+	-- rate 1.10 over 15s -> floor(16.5) = 16 (base 15). Independent per-settlement flooring gives only 15.
+	equal(repeatedOre({ GatheringSpeedBonus = 0.10 }, 15, 1), 16)
+	equal(oneShotOre({ GatheringSpeedBonus = 0.10 }, 15), 16)
+	equal(oneShotOre({}, 15), 15) -- no-Mastery baseline
+end)
+
+test("real +2% PrimaryYieldBonus: 60x1s realizes the +1 extra ore and matches one 60s settlement", function()
+	-- rate 1.02 over 60s -> floor(61.2) = 61 (base 60). At ~1s chunks the old code produced only 60.
+	equal(repeatedOre({ PrimaryYieldBonus = 0.02 }, 60, 1), 61)
+	equal(oneShotOre({ PrimaryYieldBonus = 0.02 }, 60), 61)
+	equal(oneShotOre({}, 60), 60)
+end)
+
+test("cumulative ore is chunk-size independent for a real +2% bonus (1s vs 5s vs one 60s)", function()
+	equal(repeatedOre({ GatheringSpeedBonus = 0.02 }, 60, 1), 61)
+	equal(repeatedOre({ GatheringSpeedBonus = 0.02 }, 60, 5), 61)
+	equal(repeatedOre({ GatheringSpeedBonus = 0.02 }, 60, 60), 61)
+end)
+
+test("ResetCarry drops the in-progress fraction so a fresh session starts clean", function()
+	local f = fixture(function()
+		return { GatheringSpeedBonus = 0.10 }
+	end)
+	-- Accrue a partial carry (rate 1.10 over 1s -> 1 ore, 0.10 carried).
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 1)).OreAmount, 1)
+	f.Service.ResetCarry(7)
+	-- With the carry cleared, five 1s settlements yield floor(1.10*5)=5, not 6 (no inherited 0.10).
+	local total = 0
+	for _ = 1, 5 do
+		total += assert(f.Service.GatherForElapsed(7, IronNode, 1)).OreAmount
+	end
+	equal(total, 5)
+end)
+
 print(("%d Gathering checks passed"):format(passed))
