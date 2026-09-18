@@ -1,11 +1,18 @@
 --!strict
 
--- Trusted server-owned resolution of an enemy's attack against a player. World supplies the physical
--- facts (which alive enemy is within attack range of which player, gated by a per-enemy cooldown); this
--- module owns the gameplay authority: conditional aggression (from the existing Enemy Aggression
--- config vs the player's combat progression), applying the enemy's authoritative Damage stat to
--- runtime health, awarding meaningful Defense XP for the hit taken, and reporting death. Enemy stats
--- and rewards stay owned by the Enemy service; nothing here fabricates damage or invents a target.
+-- Trusted server-owned resolution of an enemy's attack against a player, plus the small combat-
+-- engagement (provocation) state the aggression rule needs. World supplies the physical facts (which
+-- alive enemy is within attack range of which players, gated by a per-enemy cooldown); this module
+-- owns the gameplay authority:
+--   * Conditional aggression -- an enemy automatically engages a player who is appropriate or
+--     underpowered for it (from the existing Enemy Aggression config vs the player's combat
+--     progression), and ignores a player who has substantially outgrown it.
+--   * Retaliation -- an enemy also engages any player who has landed a real, server-validated attack
+--     on it, even an overpowered one. Provocation is recorded only from a genuine successful attack
+--     (RecordProvocation is called by the trusted request path), never from a client assertion, and is
+--     cleared when the enemy's RuntimeId is removed/replaced or the player leaves.
+-- Applying the enemy's authoritative Damage to runtime health and awarding difficulty-scaled Defense
+-- XP also live here. Enemy stats and rewards stay owned by the Enemy service.
 
 local EnemyDefinitions = require(script.Parent.Parent.Enemies.Definitions)
 local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
@@ -19,11 +26,18 @@ export type Skills = {
 	read GetState: (number, string) -> (any?, string?),
 	read AwardXP: (number, string, number) -> (any?, string?),
 }
+-- Difficulty-scaled Defense combat XP (see docs/DESIGN_SOURCE_OF_TRUTH.md): XP scales in a simple
+-- bounded way with enemy level relative to the player, NOT with damage taken. Trivial enemies award
+-- little/none; appropriate/dangerous ones award more, within a cap. Provisional, centralized values.
+export type DefenseXP = {
+	Base: number,
+	PerLevel: number,
+	Minimum: number,
+	Maximum: number,
+}
 export type Configuration = {
-	-- Defense XP granted per meaningful hit taken. Gated by aggression (a much stronger player is not
-	-- attacked) and the caller's attack cooldown, so it is meaningful without being freely farmable.
-	DefenseXPPerHit: number,
-	-- Skill whose level represents combat progression for the aggression comparison.
+	DefenseXP: DefenseXP,
+	-- Skill whose level represents combat progression for the aggression/difficulty comparison.
 	ProgressionSkillId: string,
 }
 export type AttackResult = {
@@ -31,6 +45,7 @@ export type AttackResult = {
 	Health: number,
 	MaxHealth: number,
 	Died: boolean,
+	Engagement: string,
 	DefenseXP: number,
 	DefenseXPAwarded: boolean,
 }
@@ -41,36 +56,91 @@ local function finitePositive(value: any): boolean
 	return type(value) == "number" and value == value and value > 0 and math.abs(value) < math.huge
 end
 
+local function finiteNumber(value: any): boolean
+	return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+
 local function wholeLevel(value: any): boolean
 	return type(value) == "number" and value == value and value % 1 == 0 and math.abs(value) < math.huge
+end
+
+local function validUserId(value: any): boolean
+	return type(value) == "number" and value > 0 and value % 1 == 0 and value <= 9007199254740991
+end
+
+local function validRuntimeId(value: any): boolean
+	return type(value) == "string" and value ~= ""
 end
 
 function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: Configuration)
 	assert(type(playerHealth) == "table" and type(playerHealth.IsAlive) == "function" and type(playerHealth.ApplyDamage) == "function" and type(playerHealth.Reset) == "function", "EnemyCombat requires PlayerHealth")
 	assert(type(skills) == "table" and type(skills.GetState) == "function" and type(skills.AwardXP) == "function", "EnemyCombat requires Skills")
-	assert(type(configuration) == "table" and finitePositive(configuration.DefenseXPPerHit) and type(configuration.ProgressionSkillId) == "string", "EnemyCombat requires a positive Defense XP amount and a progression skill")
+	assert(type(configuration) == "table" and type(configuration.ProgressionSkillId) == "string", "EnemyCombat requires a progression skill")
+	local defenseXP = configuration.DefenseXP
+	assert(
+		type(defenseXP) == "table"
+			and finiteNumber(defenseXP.Base)
+			and finiteNumber(defenseXP.PerLevel)
+			and finiteNumber(defenseXP.Minimum)
+			and finiteNumber(defenseXP.Maximum)
+			and defenseXP.Minimum >= 0
+			and defenseXP.Maximum >= defenseXP.Minimum,
+		"EnemyCombat requires a valid bounded Defense XP scale"
+	)
 
+	-- runtimeId -> set of userIds who have provoked that specific enemy instance by attacking it.
+	-- Keyed by RuntimeId so it is naturally scoped to one enemy life: a respawn (new RuntimeId) starts
+	-- with no provocations, and ClearEnemy drops a removed/replaced instance's set entirely.
+	local provocations: { [string]: { [number]: boolean } } = {}
 	local service = {}
 
-	-- Conditional aggression: an enemy engages a player only when its level, minus the player's combat
-	-- progression level, meets the enemy definition's MinimumEnemyLevelDelta. A player far stronger
-	-- than the enemy is ignored -- which is also what keeps Defense XP from being freely farmed.
-	local function aggressiveTowards(definition: any, enemyLevel: number, userId: number): (boolean, string?)
-		local progression, reason = skills.GetState(userId, configuration.ProgressionSkillId)
-		if not progression then
-			return false, reason or "ProgressionUnavailable"
+	-- Trusted: recorded only from a genuine, already server-validated successful player attack. The
+	-- client never reaches this with an arbitrary "provoked" claim -- the request path calls it only
+	-- after Combat has actually applied damage to this RuntimeId.
+	function service.RecordProvocation(runtimeId: string, userId: number): boolean
+		if not validRuntimeId(runtimeId) or not validUserId(userId) then
+			return false
 		end
-		local playerLevel = (progression :: any).Level
-		if not wholeLevel(playerLevel) then
-			return false, "InvalidProgressionLevel"
+		local set = provocations[runtimeId]
+		if not set then
+			set = {}
+			provocations[runtimeId] = set
 		end
-		return (enemyLevel - playerLevel) >= definition.Aggression.MinimumEnemyLevelDelta, nil
+		set[userId] = true
+		return true
+	end
+
+	local function isProvoked(runtimeId: string, userId: number): boolean
+		local set = provocations[runtimeId]
+		return set ~= nil and set[userId] == true
+	end
+
+	-- Clears one enemy instance's provocations. Called when its RuntimeId is removed/replaced (death or
+	-- respawn), so provocation never survives into a new enemy life.
+	function service.ClearEnemy(runtimeId: string)
+		provocations[runtimeId] = nil
+	end
+
+	-- Clears one player's provocations across all enemies. Called when the player's runtime state is no
+	-- longer valid (disconnect), so a stale userId cannot linger in a living enemy's set.
+	function service.ClearPlayer(userId: number)
+		for _, set in provocations do
+			set[userId] = nil
+		end
+	end
+
+	local function defenseXPFor(delta: number): number
+		local raw = defenseXP.Base + defenseXP.PerLevel * delta
+		local rounded = math.floor(raw + 0.5)
+		return math.clamp(rounded, defenseXP.Minimum, defenseXP.Maximum)
 	end
 
 	-- Resolves one attack attempt from `enemyState` (an Enemy runtime snapshot) against `userId`.
-	-- Returns a result only when the hit actually lands, so the caller sets its cooldown only then.
+	-- Returns a result only when the hit actually lands, so the caller sets its cooldown / picks its
+	-- target only then. A player the enemy is neither aggressive toward nor provoked by is skipped
+	-- with "NotEngaged" and takes no damage, letting the caller try the next in-range player.
 	function service.ResolveAttack(userId: number, enemyState: any): (AttackResult?, string?)
-		if type(enemyState) ~= "table" or type(enemyState.DefinitionId) ~= "string" or not wholeLevel(enemyState.Level) or not finitePositive(enemyState.Damage) then
+		if type(enemyState) ~= "table" or not validRuntimeId(enemyState.RuntimeId) or type(enemyState.DefinitionId) ~= "string" or not wholeLevel(enemyState.Level) or not finitePositive(enemyState.Damage) then
 			return nil, "InvalidEnemyState"
 		end
 		local definition = EnemyDefinitions.ById[enemyState.DefinitionId]
@@ -80,9 +150,22 @@ function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: 
 		if not playerHealth.IsAlive(userId) then
 			return nil, "TargetNotAlive"
 		end
-		local aggressive, aggressionReason = aggressiveTowards(definition, enemyState.Level, userId)
-		if not aggressive then
-			return nil, aggressionReason or "NotAggressive"
+		local progression, reason = skills.GetState(userId, configuration.ProgressionSkillId)
+		if not progression then
+			return nil, reason or "ProgressionUnavailable"
+		end
+		local playerLevel = (progression :: any).Level
+		if not wholeLevel(playerLevel) then
+			return nil, "InvalidProgressionLevel"
+		end
+
+		-- Conditional aggression: appropriate/underpowered players are auto-engaged; a player who has
+		-- substantially outgrown the enemy is not -- unless they provoked it by attacking first.
+		local delta = enemyState.Level - playerLevel
+		local autoAggressive = delta >= definition.Aggression.MinimumEnemyLevelDelta
+		local provoked = isProvoked(enemyState.RuntimeId, userId)
+		if not (autoAggressive or provoked) then
+			return nil, "NotEngaged"
 		end
 
 		local damageResult, damageReason = playerHealth.ApplyDamage(userId, enemyState.Damage)
@@ -90,17 +173,23 @@ function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: 
 			return nil, damageReason
 		end
 
-		-- Defense XP is a legitimate reward for surviving incoming combat; a failure to persist it
-		-- never undoes the damage that already landed, so it is reported, not fatal.
-		local _, xpReason = skills.AwardXP(userId, SkillIds.Defense, configuration.DefenseXPPerHit)
+		-- Defense XP scales with difficulty (enemy level vs player), not damage taken. A trivial
+		-- retaliation fight awards little or nothing; an appropriate/dangerous fight awards more.
+		local xp = defenseXPFor(delta)
+		local awarded = false
+		if xp > 0 then
+			local _, xpReason = skills.AwardXP(userId, SkillIds.Defense, xp)
+			awarded = xpReason == nil
+		end
 
 		return {
 			Damage = enemyState.Damage,
 			Health = (damageResult :: any).Health,
 			MaxHealth = (damageResult :: any).MaxHealth,
 			Died = (damageResult :: any).Died,
-			DefenseXP = configuration.DefenseXPPerHit,
-			DefenseXPAwarded = xpReason == nil,
+			Engagement = if provoked then "Provoked" else "Aggressive",
+			DefenseXP = xp,
+			DefenseXPAwarded = awarded,
 		}, nil
 	end
 

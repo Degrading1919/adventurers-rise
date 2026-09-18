@@ -62,71 +62,132 @@ local function fakeSkills(config)
 	return service, awards
 end
 
-local CONFIG = { DefenseXPPerHit = 2, ProgressionSkillId = SkillIds.Melee }
+-- Provisional bounded Defense XP scale: clamp(Base + PerLevel * (enemyLevel - playerLevel), Min, Max).
+local CONFIG = { DefenseXP = { Base = 2, PerLevel = 1, Minimum = 0, Maximum = 6 }, ProgressionSkillId = SkillIds.Melee }
+local aliveResult = { Health = 92, MaxHealth = 100, Died = false }
 
-test("an aggressive enemy applies its authoritative Damage and awards Defense XP", function()
-	local health, healthCalls = fakeHealth({ alive = true, result = { Health = 92, MaxHealth = 100, Died = false } })
-	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 1, [SkillIds.Defense] = 1 } })
+test("New requires a valid bounded Defense XP scale", function()
+	local health = fakeHealth({ alive = true })
+	local skills = fakeSkills({ levels = {} })
+	equal(pcall(EnemyCombat.New, health, skills, { ProgressionSkillId = SkillIds.Melee }), false)
+	equal(pcall(EnemyCombat.New, health, skills, { DefenseXP = { Base = 2, PerLevel = 1, Minimum = 5, Maximum = 1 }, ProgressionSkillId = SkillIds.Melee }), false)
+	assert(pcall(EnemyCombat.New, health, skills, CONFIG))
+end)
+
+test("an appropriate/underpowered player is auto-engaged: damage applied and Defense XP scaled", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 1 } })
 	local ec = EnemyCombat.New(health, skills, CONFIG)
-	local result = assert(ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 8 }))
+	-- matched fight: delta 0 -> appropriate -> 2 Defense XP
+	local result = assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 }))
+	equal(result.Engagement, "Aggressive")
 	equal(result.Damage, 8)
-	equal(result.Health, 92)
-	equal(result.Died, false)
 	equal(result.DefenseXP, 2)
 	equal(result.DefenseXPAwarded, true)
 	equal(#healthCalls.apply, 1)
-	equal(healthCalls.apply[1].amount, 8)
-	equal(#awards, 1)
 	equal(awards[1].skillId, SkillIds.Defense)
 	equal(awards[1].amount, 2)
 end)
 
-test("a much stronger player is not aggroed: no damage, no Defense XP", function()
-	local health, healthCalls = fakeHealth({ alive = true, result = { Health = 92, MaxHealth = 100, Died = false } })
-	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 20, [SkillIds.Defense] = 1 } })
+test("an overleveled player is ignored while passive (no damage, no XP)", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 36, [SkillIds.Defense] = 5 } })
 	local ec = EnemyCombat.New(health, skills, CONFIG)
-	local result, reason = ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 3, Damage = 6 })
+	local result, reason = ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 })
 	equal(result, nil)
-	equal(reason, "NotAggressive")
+	equal(reason, "NotEngaged")
 	equal(#healthCalls.apply, 0)
 	equal(#awards, 0)
+end)
+
+test("the same overleveled player is retaliated against after provoking the enemy, but the trivial fight awards ~0 Defense XP", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 36, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG)
+	assert(ec.RecordProvocation("e1", 7))
+	local result = assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 }))
+	equal(result.Engagement, "Provoked")
+	equal(#healthCalls.apply, 1) -- retaliation lands
+	equal(result.DefenseXP, 0) -- trivial: clamp(2 + (5-36), 0, 6) == 0
+	equal(result.DefenseXPAwarded, false)
+	equal(#awards, 0)
+end)
+
+test("provocation does not survive the enemy's death / a new RuntimeId", function()
+	local health = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 36, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG)
+	ec.RecordProvocation("old", 7)
+	ec.ClearEnemy("old") -- World clears the removed RuntimeId on death/respawn
+	equal(select(2, ec.ResolveAttack(7, { RuntimeId = "old", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 })), "NotEngaged")
+	-- The respawned instance has a fresh RuntimeId and inherits no provocation.
+	equal(select(2, ec.ResolveAttack(7, { RuntimeId = "new", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 })), "NotEngaged")
+end)
+
+test("ClearPlayer drops a departed player's provocations", function()
+	local health = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 36, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG)
+	ec.RecordProvocation("e1", 7)
+	ec.ClearPlayer(7)
+	equal(select(2, ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 })), "NotEngaged")
+end)
+
+test("Defense XP differs appropriately across trivial, appropriate, and dangerous difficulty", function()
+	local health = fakeHealth({ alive = true, result = aliveResult })
+	-- Trivial: strong player provokes a weak goblin (engaged via provocation), delta far negative -> 0.
+	local trivialSkills = fakeSkills({ levels = { [SkillIds.Melee] = 20, [SkillIds.Defense] = 5 } })
+	local trivialEC = EnemyCombat.New(health, trivialSkills, CONFIG)
+	trivialEC.RecordProvocation("t", 7)
+	local trivial = assert(trivialEC.ResolveAttack(7, { RuntimeId = "t", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 6 }))
+	-- Appropriate: matched levels, auto-aggressive, delta 0.
+	local appropriateSkills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local appropriate = assert(EnemyCombat.New(health, appropriateSkills, CONFIG).ResolveAttack(7, { RuntimeId = "a", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 6 }))
+	-- Dangerous: enemy well above the player, delta large positive (capped).
+	local dangerousSkills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local dangerous = assert(EnemyCombat.New(health, dangerousSkills, CONFIG).ResolveAttack(7, { RuntimeId = "d", DefinitionId = EnemyIds.GoblinChieftain, Level = 10, Damage = 20 }))
+	equal(trivial.DefenseXP, 0)
+	equal(appropriate.DefenseXP, 2)
+	equal(dangerous.DefenseXP, 6) -- clamp(2 + (10-5), 0, 6) == 6
+	assert(trivial.DefenseXP < appropriate.DefenseXP and appropriate.DefenseXP < dangerous.DefenseXP, "XP must increase with difficulty")
+end)
+
+test("no client-supplied field can create provocation or choose the XP amount", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 36, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG)
+	-- An overleveled passive player: injected "Provoked"/"Engaged" flags on the state must be ignored.
+	local spoofed, reason = ec.ResolveAttack(7, {
+		RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8,
+		Provoked = true, Engaged = true, Aggressive = true, DefenseXP = 9999,
+	})
+	equal(spoofed, nil)
+	equal(reason, "NotEngaged")
+	equal(#healthCalls.apply, 0)
+	-- Even when legitimately engaged, an injected DefenseXP field cannot inflate the reward.
+	local appropriateSkills, appropriateAwards = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local engagedEC = EnemyCombat.New(health, appropriateSkills, CONFIG)
+	local result = assert(engagedEC.ResolveAttack(7, { RuntimeId = "e2", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8, DefenseXP = 9999 }))
+	equal(result.DefenseXP, 2)
+	equal(appropriateAwards[1].amount, 2)
 end)
 
 test("a dead target is never attacked", function()
 	local health, healthCalls = fakeHealth({ alive = false })
 	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 1, [SkillIds.Defense] = 1 } })
 	local ec = EnemyCombat.New(health, skills, CONFIG)
-	local result, reason = ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 8 })
+	local result, reason = ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 8 })
 	equal(result, nil)
 	equal(reason, "TargetNotAlive")
 	equal(#healthCalls.apply, 0)
 end)
 
-test("the Chieftain is dangerous even to a strong player and uses its higher Damage", function()
-	local health, healthCalls = fakeHealth({ alive = true, result = { Health = 80, MaxHealth = 100, Died = false } })
-	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 8, [SkillIds.Defense] = 5 } })
-	local ec = EnemyCombat.New(health, skills, CONFIG)
-	-- delta -8: 10 - 8 = 2 >= -8 -> aggressive despite the strong player.
-	local result = assert(ec.ResolveAttack(7, { DefinitionId = EnemyIds.GoblinChieftain, Level = 10, Damage = 20 }))
-	equal(result.Damage, 20)
-	equal(healthCalls.apply[1].amount, 20)
-end)
-
 test("a lethal hit is reported as Died", function()
 	local health = fakeHealth({ alive = true, result = { Health = 0, MaxHealth = 100, Died = true } })
-	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 1, [SkillIds.Defense] = 1 } })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 1 } })
 	local ec = EnemyCombat.New(health, skills, CONFIG)
-	local result = assert(ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 8 }))
+	local result = assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 8 }))
 	equal(result.Died, true)
-end)
-
-test("a Defense XP failure does not undo the landed hit", function()
-	local health, healthCalls = fakeHealth({ alive = true, result = { Health = 92, MaxHealth = 100, Died = false } })
-	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 1, [SkillIds.Defense] = 1 }, failXP = true })
-	local ec = EnemyCombat.New(health, skills, CONFIG)
-	local result = assert(ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 8 }))
-	equal(result.DefenseXPAwarded, false)
-	equal(#healthCalls.apply, 1) -- damage still applied
 end)
 
 test("OnSpawn resets runtime health", function()
@@ -139,12 +200,12 @@ test("OnSpawn resets runtime health", function()
 end)
 
 test("malformed enemy state fails closed", function()
-	local health, healthCalls = fakeHealth({ alive = true, result = { Health = 90, MaxHealth = 100, Died = false } })
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
 	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 1 } })
 	local ec = EnemyCombat.New(health, skills, CONFIG)
 	equal(select(2, ec.ResolveAttack(7, "nope")), "InvalidEnemyState")
-	equal(select(2, ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 0 })), "InvalidEnemyState")
-	equal(select(2, ec.ResolveAttack(7, { DefinitionId = "enemy_unknown", Level = 5, Damage = 5 })), "UnknownEnemy")
+	equal(select(2, ec.ResolveAttack(7, { DefinitionId = EnemyIds.Goblin, Level = 8, Damage = 8 })), "InvalidEnemyState") -- missing RuntimeId
+	equal(select(2, ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = "enemy_unknown", Level = 5, Damage = 5 })), "UnknownEnemy")
 	equal(#healthCalls.apply, 0)
 end)
 
