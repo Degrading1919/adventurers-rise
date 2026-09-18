@@ -52,9 +52,11 @@ def main():
         "MasteryService": root / "src/Server/Mastery/Service.luau",
         "OfflineTrainingDefinitions": root / "src/Server/OfflineTraining/Definitions.luau",
         "OfflineTrainingService": root / "src/Server/OfflineTraining/Service.luau",
+        "PlayerHealthService": root / "src/Server/PlayerHealth/Service.luau",
         "CompositionGatheringSessions": root / "src/Server/Composition/GatheringSessions.luau",
         "CompositionTrainingSessions": root / "src/Server/Composition/TrainingSessions.luau",
         "CompositionCombatRewards": root / "src/Server/Composition/CombatRewards.luau",
+        "CompositionEnemyCombat": root / "src/Server/Composition/EnemyCombat.luau",
         "CompositionReadModel": root / "src/Server/Composition/ReadModel.luau",
         "CompositionWorldAdapters": root / "src/Server/Composition/WorldAdapters.luau",
         "CompositionService": root / "src/Server/Composition/Service.luau",
@@ -85,12 +87,14 @@ local scripts = {{
     PlayerDataStore = {{ Parent = {{ Schema = "PlayerDataSchema", Migrations = "PlayerDataMigrations" }} }},
     PlayerDataService = {{ Parent = {{ Schema = "PlayerDataSchema", Store = "PlayerDataStore" }} }},
     CompositionCombatRewards = {{ Parent = {{ Parent = {{ Enemies = {{ Definitions = "EnemyDefinitions" }} }} }} }},
+    CompositionEnemyCombat = {{ Parent = {{ Parent = {{ Enemies = {{ Definitions = "EnemyDefinitions" }} }} }} }},
     CompositionReadModel = {{ Parent = {{ Parent = {{ Plots = {{ StationDefinitions = "StationDefinitions" }} }} }} }},
     CompositionService = {{
         Parent = {{
             GatheringSessions = "CompositionGatheringSessions",
             TrainingSessions = "CompositionTrainingSessions",
             CombatRewards = "CompositionCombatRewards",
+            EnemyCombat = "CompositionEnemyCombat",
             ReadModel = "CompositionReadModel",
             Parent = {{
                 Skills = {{ Curves = "SkillCurves", Service = "SkillsService" }},
@@ -106,6 +110,7 @@ local scripts = {{
                 Ascension = {{ Service = "AscensionService" }},
                 Mastery = {{ Service = "MasteryService" }},
                 OfflineTraining = {{ Service = "OfflineTrainingService" }},
+                PlayerHealth = {{ Service = "PlayerHealthService" }},
             }},
         }},
     }},
@@ -177,6 +182,8 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Store)', 'require("./PlayerDataStore")')
             elif name == "CompositionCombatRewards":
                 source = source.replace('require(script.Parent.Parent.Enemies.Definitions)', 'require("./EnemyDefinitions")')
+            elif name == "CompositionEnemyCombat":
+                source = source.replace('require(script.Parent.Parent.Enemies.Definitions)', 'require("./EnemyDefinitions")')
             elif name == "CompositionReadModel":
                 source = source.replace('require(script.Parent.Parent.Plots.StationDefinitions)', 'require("./StationDefinitions")')
             elif name == "CompositionService":
@@ -194,9 +201,11 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Parent.Ascension.Service)', 'require("./AscensionService")')
                 source = source.replace('require(script.Parent.Parent.Mastery.Service)', 'require("./MasteryService")')
                 source = source.replace('require(script.Parent.Parent.OfflineTraining.Service)', 'require("./OfflineTrainingService")')
+                source = source.replace('require(script.Parent.Parent.PlayerHealth.Service)', 'require("./PlayerHealthService")')
                 source = source.replace('require(script.Parent.GatheringSessions)', 'require("./CompositionGatheringSessions")')
                 source = source.replace('require(script.Parent.TrainingSessions)', 'require("./CompositionTrainingSessions")')
                 source = source.replace('require(script.Parent.CombatRewards)', 'require("./CompositionCombatRewards")')
+                source = source.replace('require(script.Parent.EnemyCombat)', 'require("./CompositionEnemyCombat")')
                 source = source.replace('require(script.Parent.ReadModel)', 'require("./CompositionReadModel")')
             target = temporary / f"{name}.luau"
             target.write_text(source, encoding="utf-8")

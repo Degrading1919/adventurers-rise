@@ -19,6 +19,7 @@ export type Ascension = {
 	read EvaluateRequirements: (number, string) -> (any?, string?),
 }
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
+export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
 
 export type Services = {
 	Economy: Economy,
@@ -29,6 +30,7 @@ export type Services = {
 	Mastery: Mastery,
 	Ascension: Ascension,
 	OfflineTraining: OfflineTraining,
+	PlayerHealth: PlayerHealth,
 }
 
 local SLICE_SKILL_IDS = { SkillIds.Melee, SkillIds.Defense, SkillIds.Mining, SkillIds.Smithing }
@@ -118,6 +120,11 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			return nil, focusReason
 		end
 
+		local health, healthReason = services.PlayerHealth.GetState(userId)
+		if not health then
+			return nil, healthReason
+		end
+
 		return {
 			Gold = gold,
 			Skills = skills,
@@ -129,6 +136,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 				RankId = (ascensionState :: any).RankId,
 				AdeptProgress = adeptProgress,
 			},
+			Health = health,
 			OfflineFocusSkillId = focusSkillId,
 			-- Retained only for the current session (composition clears it on disconnect); copied
 			-- here so a caller mutating the returned model can never affect what a later read sees.

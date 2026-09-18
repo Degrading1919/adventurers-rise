@@ -32,10 +32,24 @@ local ATTR_STATION_ID = "StationId"
 local RESPAWN_SECONDS = 5
 local DEATH_POLL_SECONDS = 0.5
 
+-- Provisional enemy melee reach (studs) and per-enemy attack cooldown (seconds). Enemies are
+-- stationary at their markers, so a player is in danger only while standing within reach; the
+-- cooldown is the trusted rate limit on incoming damage and on Defense XP.
+local ENEMY_ATTACK_RANGE = 10
+local ENEMY_ATTACK_COOLDOWN = 2
+
 export type Enemies = {
 	read Create: (string) -> (any?, string?),
 	read GetSnapshot: (string) -> (any?, string?),
 	read Remove: (string) -> (any?, string?),
+}
+
+-- Trusted enemy-attack resolver (see Composition/EnemyCombat): given a target userId and an Enemy
+-- runtime snapshot it decides aggression, applies the enemy's authoritative Damage to runtime health,
+-- awards Defense XP, and reports death. World supplies only the physical facts (range, cooldown).
+export type EnemyCombat = {
+	read ResolveAttack: (number, any) -> (any?, string?),
+	read OnSpawn: (number) -> (),
 }
 
 export type Runtime = {
@@ -79,6 +93,8 @@ function Service.New(runtime: Runtime)
 	-- lookup miss is an authoritative "this runtime instance no longer has a body in the world".
 	local enemyModels: { [string]: Model } = {}
 	local records: { EnemyRecord } = {}
+	-- runtimeId -> monotonic time of this enemy's last landed attack, for the trusted attack cooldown.
+	local lastAttackAt: { [string]: number } = {}
 
 	local service = {}
 
@@ -316,9 +332,58 @@ function Service.New(runtime: Runtime)
 		end
 	end
 
+	-- One shared pass (same heartbeat as pollDeaths) that lets each alive enemy attack the nearest
+	-- player within reach, gated by its cooldown. All gameplay authority (aggression, damage amount,
+	-- Defense XP, death) lives in enemyCombat; World only decides "who is physically in range now" and
+	-- turns a lethal result into the normal Roblox character respawn. No task-per-enemy.
+	local function attackPass(enemies: Enemies, enemyCombat: EnemyCombat)
+		local now = runtime.Clock()
+		local players = runtime.Players:GetPlayers()
+		if #players == 0 then
+			return
+		end
+		for _, record in records do
+			local body = record.Model.PrimaryPart
+			if record.RespawnAt == nil and body and (now - (lastAttackAt[record.RuntimeId] or 0)) >= ENEMY_ATTACK_COOLDOWN then
+				local snapshot = enemies.GetSnapshot(record.RuntimeId)
+				if snapshot and snapshot.Alive then
+					local targetUserId: number? = nil
+					local targetRoot: BasePart? = nil
+					local bestDistance: number? = nil
+					for _, player in players do
+						local character = player.Character
+						local root = character and character:FindFirstChild("HumanoidRootPart")
+						if root and root:IsA("BasePart") then
+							local distance = (root.Position - body.Position).Magnitude
+							if distance <= ENEMY_ATTACK_RANGE and (bestDistance == nil or distance < bestDistance) then
+								targetUserId = player.UserId
+								targetRoot = root
+								bestDistance = distance
+							end
+						end
+					end
+					if targetUserId and targetRoot then
+						local result = enemyCombat.ResolveAttack(targetUserId, snapshot)
+						if result then
+							-- The hit landed: rate-limit this enemy, and on a lethal hit trigger the
+							-- normal character death/respawn (progression stays in PlayerData, untouched).
+							lastAttackAt[record.RuntimeId] = now
+							if (result :: any).Died then
+								local humanoid = targetRoot.Parent and targetRoot.Parent:FindFirstChildOfClass("Humanoid")
+								if humanoid then
+									humanoid.Health = 0
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
 	-- Spawns the provisional physical enemies at every tagged marker, creating one repository runtime
 	-- instance per marker and binding it to the physical model, then starts the shared death poll.
-	function service.Start(enemies: Enemies)
+	function service.Start(enemies: Enemies, enemyCombat: EnemyCombat)
 		assert(
 			type(enemies) == "table"
 				and type(enemies.Create) == "function"
@@ -326,6 +391,23 @@ function Service.New(runtime: Runtime)
 				and type(enemies.Remove) == "function",
 			"World.Start requires the repository Enemies service"
 		)
+		assert(
+			type(enemyCombat) == "table" and type(enemyCombat.ResolveAttack) == "function" and type(enemyCombat.OnSpawn) == "function",
+			"World.Start requires the enemy-combat resolver"
+		)
+
+		-- Runtime health returns to full whenever a character (re)spawns. Hooking here (rather than a
+		-- per-enemy or per-frame loop) keeps enemy death -> respawn -> full health a single clean path.
+		local function hookPlayer(player: Player)
+			enemyCombat.OnSpawn(player.UserId)
+			player.CharacterAdded:Connect(function()
+				enemyCombat.OnSpawn(player.UserId)
+			end)
+		end
+		for _, player in runtime.Players:GetPlayers() do
+			hookPlayer(player)
+		end
+		runtime.Players.PlayerAdded:Connect(hookPlayer)
 
 		local container = runtime.Workspace:FindFirstChild("AR_Enemies")
 		if not container then
@@ -363,6 +445,7 @@ function Service.New(runtime: Runtime)
 			while true do
 				runtime.Wait(DEATH_POLL_SECONDS)
 				pollDeaths(enemies)
+				attackPass(enemies, enemyCombat)
 			end
 		end)
 	end
