@@ -25,6 +25,16 @@ export type Result = {
 	SmithingState: any,
 }
 
+-- Server-owned Mastery modifier totals for the crafter's Smithing tree (see Mastery.GetModifiers, the
+-- single source of truth). Read from the same transactional `data` being mutated, so a selection/respec
+-- is applied atomically with the craft. Crafting only READS the totals it can truthfully honor today.
+export type ModifierTotals = { [string]: number }
+export type SmithingModifierProvider = (any) -> ModifierTotals
+
+-- Keeps a fully-stacked material efficiency below 1 so every input still costs at least a positive
+-- amount (never free or negative). Current slice data caps a completed Forgemaster branch at 0.10.
+local MAX_MATERIAL_EFFICIENCY = 0.9
+
 -- Trusted server systems (a shared or personal Forge) call service.Craft; no recipe logic lives in Studio.
 local Service = {}
 
@@ -32,11 +42,23 @@ local function validUserId(userId: any): boolean
 	return type(userId) == "number" and userId > 0 and userId % 1 == 0 and userId <= 9007199254740991
 end
 
+-- Reads one modifier total defensively; a missing/non-finite entry contributes nothing (never a bonus).
+local function modifierTotal(totals: any, key: string): number
+	if type(totals) ~= "table" then
+		return 0
+	end
+	local value = totals[key]
+	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
+		return 0
+	end
+	return value
+end
+
 local function validStableId(value: any): boolean
 	return type(value) == "string" and value ~= ""
 end
 
-function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skills)
+function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skills, smithingModifiers: SmithingModifierProvider?)
 	assert(type(playerData) == "table" and type(playerData.Update) == "function", "Crafting requires PlayerData")
 	assert(
 		type(inventory) == "table"
@@ -46,8 +68,14 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 		"Crafting requires Inventory"
 	)
 	assert(type(skills) == "table" and type(skills.GetStateFromData) == "function" and type(skills.AwardXPToData) == "function", "Crafting requires Skills")
+	assert(smithingModifiers == nil or type(smithingModifiers) == "function", "Crafting smithingModifiers must be a function when provided")
 	local valid, reason = Definitions.Validate(Definitions.ById)
 	assert(valid, reason)
+	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep exact prior
+	-- material consumption. Composition injects the real server-authoritative Smithing provider.
+	local resolveSmithingModifiers: SmithingModifierProvider = smithingModifiers or function()
+		return {}
+	end
 
 	local service = {}
 
@@ -90,8 +118,16 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 				abort("InsufficientSmithingLevel")
 			end
 
+			-- MaterialEfficiencyBonus reduces how much of each input the craft consumes. The effective
+			-- amount is rounded up and floored at 1, so a craft is never free or negative-cost. At the
+			-- current +/-10% branch cap on the slice's 2- and 3-unit recipes this rounds to no change;
+			-- the modifier is nonetheless applied so it takes effect for any larger-cost recipe.
+			-- ProcessingSpeedBonus is intentionally NOT consumed here: Craft is an atomic transaction with
+			-- no authoritative action-time to shorten, and fabricating a delay would not be trustworthy.
+			local materialEfficiency = math.clamp(math.max(0, modifierTotal(resolveSmithingModifiers(data), "MaterialEfficiencyBonus")), 0, MAX_MATERIAL_EFFICIENCY)
 			for _, recipeInput in definition.Inputs do
-				local _, removeReason = inventory.RemoveStackFromData(data, recipeInput.ItemDefinitionId, recipeInput.Amount)
+				local requiredAmount = math.max(1, math.ceil(recipeInput.Amount * (1 - materialEfficiency)))
+				local _, removeReason = inventory.RemoveStackFromData(data, recipeInput.ItemDefinitionId, requiredAmount)
 				if removeReason then
 					abort(removeReason)
 				end

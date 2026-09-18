@@ -44,7 +44,7 @@ local function curve()
 	return { MaximumXP = 6000, Thresholds = thresholds }
 end
 
-local function fixture()
+local function fixture(miningModifiers)
 	local records = {
 		[7] = {
 			Gold = 25,
@@ -100,7 +100,7 @@ local function fixture()
 	local inventory = Inventory.New(playerData, { NewInstanceId = function() return "unused" end })
 	local equipment = Equipment.New(playerData)
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
-	local service = Gathering.New(playerData, equipment, inventory, skills, resolveNode)
+	local service = Gathering.New(playerData, equipment, inventory, skills, resolveNode, miningModifiers)
 	return {
 		Records = records,
 		PlayerData = playerData,
@@ -261,6 +261,74 @@ test("ValidateForBegin rejects exactly what GatherForElapsed would reject, via t
 	local distant, distantReason = f.Service.ValidateForBegin(7, IronNode)
 	equal(distant, nil)
 	equal(distantReason, "NodeOutOfRange")
+end)
+
+-- ===== Mining Mastery: GatheringSpeedBonus + PrimaryYieldBonus =====
+-- The fixture injects a provider standing in for Mastery.GetModifiers(userId, Mining). With the basic
+-- pickaxe the base rate is 1 ore/s and 2 Mining XP/s, so a 2s gather yields 2 ore / 4 XP with no nodes.
+
+test("no Mining selections preserve the exact base ore and XP", function()
+	local f = fixture(function() return {} end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 2)
+	equal(result.MiningXP, 4)
+end)
+
+test("GatheringSpeedBonus raises both ore throughput and Mining XP per real second", function()
+	local f = fixture(function() return { GatheringSpeedBonus = 0.5 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 3) -- floor(1 * 1 * 2 * 1.5)
+	equal(result.MiningXP, 6) -- 2 * 1 * 2 * 1.5
+	equal(f.Records[7].Inventory.Stacks[IronOre], 3)
+end)
+
+test("PrimaryYieldBonus enriches ore output only and never inflates Mining XP", function()
+	local f = fixture(function() return { PrimaryYieldBonus = 0.5 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 3) -- floor(1 * 1 * 2 * 1.5)
+	equal(result.MiningXP, 4) -- unchanged: yield does not touch XP
+end)
+
+test("speed and yield stack on ore per Mastery.GetModifiers while only speed affects XP", function()
+	local f = fixture(function() return { GatheringSpeedBonus = 0.5, PrimaryYieldBonus = 0.5 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 4) -- floor(1 * 1 * 2 * 1.5 * 1.5) == floor(4.5)
+	equal(result.MiningXP, 6) -- 2 * 1 * 2 * 1.5
+end)
+
+test("Mining modifiers scale outputs deterministically without touching trusted elapsed time", function()
+	-- Same trusted elapsed -> identical result every time (floor is deterministic, no RNG).
+	local f = fixture(function() return { GatheringSpeedBonus = 0.5 } end)
+	local first = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	local second = assert(fixture(function() return { GatheringSpeedBonus = 0.5 } end).Service.GatherForElapsed(7, IronNode, 2))
+	equal(first.OreAmount, second.OreAmount)
+	equal(first.MiningXP, second.MiningXP)
+	-- The elapsed cap is still enforced regardless of any bonus, so time cannot be inflated.
+	local capped, cappedReason = f.Service.GatherForElapsed(7, IronNode, Gathering.MaximumElapsedSeconds + 1)
+	equal(capped, nil)
+	equal(cappedReason, "InvalidElapsedSeconds")
+end)
+
+test("spoofed or non-numeric Mining modifier values contribute no bonus", function()
+	local f = fixture(function() return { GatheringSpeedBonus = "9", PrimaryYieldBonus = 0.5, Junk = 1 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 3) -- string speed ignored; only the numeric yield applies
+	equal(result.MiningXP, 4) -- speed string ignored, so XP stays at base
+end)
+
+test("a respec clearing Mining nodes restores base ore/XP immediately", function()
+	local bonus = 0.5
+	local f = fixture(function() return { GatheringSpeedBonus = bonus } end)
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 2)).OreAmount, 3)
+	bonus = 0
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 2)).OreAmount, 2)
+end)
+
+test("a non-function Mining modifier provider is rejected", function()
+	local ok = pcall(function()
+		return fixture(5)
+	end)
+	equal(ok, false)
 end)
 
 print(("%d Gathering checks passed"):format(passed))

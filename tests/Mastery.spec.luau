@@ -382,6 +382,26 @@ test("modifiers from different branches of the same skill combine into distinct 
 	equal(modifiers.MeleeAttackIntervalReduction, 0.02)
 end)
 
+test("a respec clears a skill's modifier totals so consumers immediately lose the effect", function()
+	local f = fixture()
+	f.Records[7].SkillXP[SkillIds.Melee] = xpForLevel(15)
+	assert(f.Service.Select(7, SkillIds.Melee, MeleeMight[1]))
+	assert(f.Service.Select(7, SkillIds.Melee, MeleeMight[2]))
+	equal(assert(f.Service.GetModifiers(7, SkillIds.Melee)).MeleeDamageBonus, 0.04)
+	assert(f.Service.Respec(7, SkillIds.Melee))
+	-- After respec the totals are empty, so every consuming system reads no bonus on its next call.
+	equal(next(assert(f.Service.GetModifiers(7, SkillIds.Melee))), nil)
+end)
+
+test("GetModifiersFromData reads the same totals from an in-transaction data snapshot", function()
+	local f = fixture()
+	f.Records[7].SkillXP[SkillIds.Melee] = xpForLevel(5)
+	assert(f.Service.Select(7, SkillIds.Melee, MeleeMight[1]))
+	local data = f.PlayerData.GetSnapshot(7)
+	local fromData = assert(f.Service.GetModifiersFromData(data, SkillIds.Melee))
+	equal(fromData.MeleeDamageBonus, 0.02)
+end)
+
 test("the first respec per skill is free and clears only that skill's selections", function()
 	local f = fixture()
 	f.Records[7].SkillXP[SkillIds.Melee] = xpForLevel(5)

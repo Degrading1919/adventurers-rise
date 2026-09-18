@@ -74,4 +74,51 @@ test("Clear discards runtime health so a fresh life reads full", function()
 	equal(assert(s.GetState(7)).Health, 100)
 end)
 
+-- ===== Defense Mastery: MaxHealthBonus =====
+
+test("a non-function Defense modifier provider is rejected", function()
+	equal(pcall(PlayerHealth.New, { MaxHealth = 100 }, 5), false)
+	assert(pcall(PlayerHealth.New, { MaxHealth = 100 }, function() return {} end))
+end)
+
+test("MaxHealthBonus raises maximum health and applies immediately", function()
+	local bonus = 0
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { MaxHealthBonus = bonus } end)
+	-- No selections: exact base behavior.
+	equal(assert(s.GetState(7)).MaxHealth, 100)
+	equal(assert(s.GetState(7)).Health, 100)
+	-- Selecting a +10% Fortitude total takes effect on the very next read (110 = floor(100 * 1.10)).
+	bonus = 0.10
+	local state = assert(s.GetState(7))
+	equal(state.MaxHealth, 110)
+	equal(state.Health, 110)
+	equal(assert(s.Reset(7)).Health, 110)
+	equal(assert(s.Reset(7)).MaxHealth, 110)
+	-- Damage is dealt against the boosted maximum.
+	equal(assert(s.ApplyDamage(7, 30)).Health, 80)
+	equal(assert(s.ApplyDamage(7, 30)).MaxHealth, 110)
+end)
+
+test("a respec clearing MaxHealthBonus removes it immediately and clamps current health down", function()
+	local bonus = 0.10
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { MaxHealthBonus = bonus } end)
+	assert(s.Reset(7))
+	equal(assert(s.GetState(7)).Health, 110)
+	-- Respec removes the node: the next read reflects the base maximum and clamps current health to it.
+	bonus = 0
+	local state = assert(s.GetState(7))
+	equal(state.MaxHealth, 100)
+	equal(state.Health, 100)
+end)
+
+test("spoofed or non-numeric Defense modifier values contribute no MaxHealth bonus", function()
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function()
+		-- A string is not a trusted number; unrelated keys are ignored; a negative never lowers the base.
+		return { MaxHealthBonus = "9.0", GarbageKey = 999 }
+	end)
+	equal(assert(s.GetState(7)).MaxHealth, 100)
+	local negative = PlayerHealth.New({ MaxHealth = 100 }, function() return { MaxHealthBonus = -0.5 } end)
+	equal(assert(negative.GetState(7)).MaxHealth, 100)
+end)
+
 print(("%d PlayerHealth checks passed"):format(passed))

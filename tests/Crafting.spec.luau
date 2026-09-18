@@ -46,7 +46,7 @@ local function curve()
 	return { MaximumXP = 6000, Thresholds = thresholds }
 end
 
-local function fixture(nextInstanceIds)
+local function fixture(nextInstanceIds, smithingModifiers)
 	local records = {
 		[7] = {
 			Gold = 25,
@@ -94,7 +94,7 @@ local function fixture(nextInstanceIds)
 	}
 	local inventory = Inventory.New(playerData, runtime)
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
-	local service = Crafting.New(playerData, inventory, skills)
+	local service = Crafting.New(playerData, inventory, skills, smithingModifiers)
 	return {
 		Records = records,
 		PlayerData = playerData,
@@ -238,6 +238,70 @@ test("buying recipe inputs from the shop and reselling crafted outputs cannot gu
 	local swordSellPrice = shop.Entries[UpgradedSword].SellPrice
 	local oreCostPerSword = oreBuyPrice * barRecipe.Inputs[1].Amount * swordRecipe.Inputs[1].Amount
 	assert(oreCostPerSword > swordSellPrice)
+end)
+
+-- ===== Smithing Mastery: MaterialEfficiencyBonus (ProcessingSpeedBonus is intentionally inert) =====
+-- The fixture injects a provider standing in for Mastery.GetModifiers(...Smithing) read from the same
+-- transaction. The Iron Bar recipe consumes 2 Iron Ore; effective cost = max(1, ceil(2 * (1 - eff))).
+
+test("no Smithing selections consume the recipe's full material cost", function()
+	local f = fixture(nil, function() return {} end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 8) -- 10 - 2
+end)
+
+test("MaterialEfficiencyBonus reduces material consumption per the defined formula", function()
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = 0.5 } end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 9) -- max(1, ceil(2 * 0.5)) == 1 consumed
+	equal(f.Records[7].Inventory.Stacks[IronBar], 1) -- output still produced
+end)
+
+test("MaterialEfficiencyBonus reduces a multi-unit recipe's consumption too", function()
+	local f = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = 0.5 } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(f.Service.Craft(7, SwordRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronBar], 1) -- max(1, ceil(3 * 0.5)) == 2 consumed, 1 left
+end)
+
+test("material efficiency is clamped so a craft always costs at least one of each input", function()
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = 5 } end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 9) -- clamped: still consumes 1, never 0/free
+	equal(f.Records[7].Inventory.Stacks[IronBar], 1)
+end)
+
+test("ProcessingSpeedBonus does not change authoritative crafting (no action-time exists to shorten)", function()
+	local base = fixture(nil, function() return {} end)
+	assert(base.Service.Craft(7, IronBarRecipe))
+	local withSpeed = fixture(nil, function() return { ProcessingSpeedBonus = 0.9 } end)
+	assert(withSpeed.Service.Craft(7, IronBarRecipe))
+	-- Identical consumption and output: ProcessingSpeedBonus is read but truthfully has nothing to act on.
+	equal(withSpeed.Records[7].Inventory.Stacks[IronOre], base.Records[7].Inventory.Stacks[IronOre])
+	equal(withSpeed.Records[7].Inventory.Stacks[IronBar], base.Records[7].Inventory.Stacks[IronBar])
+end)
+
+test("a respec clearing Smithing nodes restores full material cost immediately", function()
+	local efficiency = 0.5
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = efficiency } end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 9) -- reduced
+	efficiency = 0
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 7) -- next craft consumes the full 2 again (9 - 2)
+end)
+
+test("a spoofed non-numeric MaterialEfficiencyBonus grants no discount", function()
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = "0.9", Junk = 1 } end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 8) -- string ignored -> full 2 consumed
+end)
+
+test("a non-function Smithing modifier provider is rejected", function()
+	local ok = pcall(function()
+		return fixture(nil, 5)
+	end)
+	equal(ok, false)
 end)
 
 print(("%d Crafting checks passed"):format(passed))
