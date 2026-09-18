@@ -15,6 +15,8 @@
 local ENEMY_SPAWN_TAG = "AR_EnemySpawn"
 local ENEMY_TAG = "AR_Enemy"
 local GATHERING_NODE_TAG = "AR_GatheringNode"
+local TRAINING_STATION_TAG = "AR_TrainingStation"
+local FORGE_TAG = "AR_Forge"
 
 -- Attribute keys (stable identifiers, never display names).
 local ATTR_ENEMY_DEFINITION_ID = "EnemyDefinitionId"
@@ -22,6 +24,7 @@ local ATTR_ENEMY_RUNTIME_ID = "EnemyRuntimeId"
 local ATTR_ENEMY_LEVEL = "EnemyLevel"
 local ATTR_ENEMY_ALIVE = "EnemyAlive"
 local ATTR_GATHERING_NODE_ID = "GatheringNodeId"
+local ATTR_STATION_ID = "StationId"
 
 -- Provisional respawn cadence and a low-frequency death poll. Event-driven death is not exposed by
 -- the repository Enemies service, so a single shared poll re-reads authoritative Alive state; this is
@@ -156,6 +159,63 @@ function Service.New(runtime: Runtime)
 			return nil, "NodeInstanceNotFound"
 		end
 		return { Id = nodeId, Eligible = true, Distance = nearest }, nil
+	end
+
+	-- Shared nearest-instance scan over a tag, honouring the Workspace-descendant rule. `matches`
+	-- lets a caller further restrict by attribute (e.g. a station's StableId); pass nil to accept any.
+	local function nearestTaggedDistance(position: Vector3, tag: string, matches: ((Instance) -> boolean)?): number?
+		local nearest: number? = nil
+		for _, instance in runtime.Collection:GetTagged(tag) do
+			if isWorldContent(instance) and (matches == nil or matches(instance)) then
+				local pivot: Vector3? = nil
+				if instance:IsA("BasePart") then
+					pivot = instance.Position
+				elseif instance:IsA("Model") then
+					pivot = instance:GetPivot().Position
+				end
+				if pivot then
+					local distance = (position - pivot).Magnitude
+					if nearest == nil or distance < nearest then
+						nearest = distance
+					end
+				end
+			end
+		end
+		return nearest
+	end
+
+	-- StationDistanceProvider: (userId, stationId) -> (distance, reason). Real physical distance from
+	-- the player to the AR_TrainingStation instance carrying that stable StationId. Fail closed (no
+	-- fabricated distance) when the player is absent or no such station exists in the world.
+	function service.StationDistanceProvider(userId: number, stationId: string): (number?, string?)
+		if type(stationId) ~= "string" or stationId == "" then
+			return nil, "InvalidStationId"
+		end
+		local position, reason = characterPosition(userId)
+		if not position then
+			return nil, reason
+		end
+		local nearest = nearestTaggedDistance(position, TRAINING_STATION_TAG, function(instance)
+			return instance:GetAttribute(ATTR_STATION_ID) == stationId
+		end)
+		if nearest == nil then
+			return nil, "StationInstanceNotFound"
+		end
+		return nearest, nil
+	end
+
+	-- ForgeDistanceProvider: (userId) -> (distance, reason). Real physical distance from the player to
+	-- the nearest AR_Forge instance. Fail closed when the player is absent or no Forge exists.
+	function service.ForgeDistanceProvider(userId: number): (number?, string?)
+		local position, reason = characterPosition(userId)
+		if not position then
+			return nil, reason
+		end
+		local nearest = nearestTaggedDistance(position, FORGE_TAG, nil)
+		if nearest == nil then
+			return nil, "ForgeInstanceNotFound"
+		end
+		return nearest, nil
 	end
 
 	local function buildEnemyModel(marker: BasePart, definitionId: string, state: any, container: Folder): Model

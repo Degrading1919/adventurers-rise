@@ -5,13 +5,16 @@
 -- Server/Ascension/Service.luau's RecordBossMilestone).
 local ids = {
 	GoblinChieftainDefeated = "flag_boss_goblin_chieftain_defeated",
+	StarterKitGranted = "flag_starter_kit_granted",
 }
 
 local byId: { [string]: boolean } = {
 	[ids.GoblinChieftainDefeated] = true,
+	[ids.StarterKitGranted] = true,
 }
 
 return table.freeze({
 	GoblinChieftainDefeated = ids.GoblinChieftainDefeated,
+	StarterKitGranted = ids.StarterKitGranted,
 	ById = table.freeze(byId),
 })

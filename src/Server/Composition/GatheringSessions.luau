@@ -70,6 +70,15 @@ function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock:
 			-- succeeding never grandfathers a later one.
 			local result, reason = gathering.GatherForElapsed(userId, session.NodeId, chunk)
 			if not result then
+				-- "GatheringIntervalTooShort" is not a validation failure: the node/tool/level are all
+				-- still valid, only less than one whole unit of real time has accumulated so far (the
+				-- 1s heartbeat can fire its first tick a fraction of a second after Begin). Keep the
+				-- session and its unspent time -- never advance LastSettledAt -- so the next settlement
+				-- includes it, instead of killing a perfectly valid continuous-gathering session. Any
+				-- other reason (out of range, tool unequipped, level lost) still fails closed.
+				if reason == "GatheringIntervalTooShort" then
+					return nil, reason
+				end
 				sessions[userId] = nil
 				return nil, reason
 			end

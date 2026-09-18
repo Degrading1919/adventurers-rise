@@ -20,6 +20,7 @@ def main():
     shared_modules = [
         "SkillIds", "PlotSockets", "EquipmentSlots", "ItemDefinitions", "EnemyIds",
         "GatheringNodeIds", "RecipeIds", "AscensionIds", "ProgressionFlagIds", "MasteryIds",
+        "RequestIds",
     ]
     modules = {name: root / f"src/Shared/{name}.luau" for name in shared_modules}
     modules.update({
@@ -51,7 +52,6 @@ def main():
         "MasteryService": root / "src/Server/Mastery/Service.luau",
         "OfflineTrainingDefinitions": root / "src/Server/OfflineTraining/Definitions.luau",
         "OfflineTrainingService": root / "src/Server/OfflineTraining/Service.luau",
-        "CompositionRequestIds": root / "src/Server/Composition/RequestIds.luau",
         "CompositionGatheringSessions": root / "src/Server/Composition/GatheringSessions.luau",
         "CompositionTrainingSessions": root / "src/Server/Composition/TrainingSessions.luau",
         "CompositionCombatRewards": root / "src/Server/Composition/CombatRewards.luau",
@@ -88,7 +88,6 @@ local scripts = {{
     CompositionReadModel = {{ Parent = {{ Parent = {{ Plots = {{ StationDefinitions = "StationDefinitions" }} }} }} }},
     CompositionService = {{
         Parent = {{
-            RequestIds = "CompositionRequestIds",
             GatheringSessions = "CompositionGatheringSessions",
             TrainingSessions = "CompositionTrainingSessions",
             CombatRewards = "CompositionCombatRewards",
@@ -195,7 +194,6 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Parent.Ascension.Service)', 'require("./AscensionService")')
                 source = source.replace('require(script.Parent.Parent.Mastery.Service)', 'require("./MasteryService")')
                 source = source.replace('require(script.Parent.Parent.OfflineTraining.Service)', 'require("./OfflineTrainingService")')
-                source = source.replace('require(script.Parent.RequestIds)', 'require("./CompositionRequestIds")')
                 source = source.replace('require(script.Parent.GatheringSessions)', 'require("./CompositionGatheringSessions")')
                 source = source.replace('require(script.Parent.TrainingSessions)', 'require("./CompositionTrainingSessions")')
                 source = source.replace('require(script.Parent.CombatRewards)', 'require("./CompositionCombatRewards")')

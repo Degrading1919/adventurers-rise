@@ -12,7 +12,7 @@ local EconomyService = require("EconomyService")
 local PlayerDataSchema = require("PlayerDataSchema")
 local PlayerDataStore = require("PlayerDataStore")
 local PlayerDataService = require("PlayerDataService")
-local RequestIds = require("CompositionRequestIds")
+local RequestIds = require("RequestIds")
 local CompositionWorldAdapters = require("CompositionWorldAdapters")
 local Composition = require("CompositionService")
 
@@ -138,6 +138,10 @@ local function buildStack(options: any?)
 	-- closed exactly like the real placeholder adapters, without fabricating a target/node.
 	local combatDistances: { [string]: number } = {}
 	local gatheringNodes: { [string]: { Eligible: boolean, Distance: number } } = {}
+	-- Station/Forge proximity doubles: default to "at the station/Forge" (distance 0) so existing
+	-- tests exercise the normal near case; a test sets a large distance to model walking away.
+	local stationDistances: { [string]: number } = {}
+	local forgeDistance = { Value = 0 }
 	local worldAdapters = {
 		CombatDistanceProvider = function(_attackerUserId: number, enemyState: any): (number?, string?)
 			local distance = combatDistances[enemyState.RuntimeId]
@@ -152,6 +156,16 @@ local function buildStack(options: any?)
 				return nil, "NoWorldMapping"
 			end
 			return { Id = nodeId, Eligible = config.Eligible, Distance = config.Distance }, nil
+		end,
+		StationDistanceProvider = function(_userId: number, stationId: string): (number?, string?)
+			local distance = stationDistances[stationId]
+			if distance == nil then
+				return 0, nil
+			end
+			return distance, nil
+		end,
+		ForgeDistanceProvider = function(_userId: number): (number?, string?)
+			return forgeDistance.Value, nil
 		end,
 	}
 
@@ -175,6 +189,8 @@ local function buildStack(options: any?)
 	f.Composition = composition
 	f.CombatDistances = combatDistances
 	f.GatheringNodes = gatheringNodes
+	f.StationDistances = stationDistances
+	f.ForgeDistance = forgeDistance
 	f.Warnings = warnings
 	f.Advance = advance
 	f.Clock = monotonicClock
@@ -729,6 +745,66 @@ test("leaving clears the active training session", function()
 	joinPlayer(f, 7)
 	local ended = request(f, 7, RequestIds.TrainingEnd, {})
 	equal(ended.Ok, false)
+end)
+
+-- ===== Physical proximity authority (Training / station upgrade / Forge) =====
+
+test("Training Begin is server-gated on physical station proximity: too far is rejected, then near succeeds", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	f.StationDistances["station_training_melee"] = 999
+	local far = request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" })
+	equal(far.Ok, false)
+	equal(far.Reason, "TooFarFromStation")
+	f.Advance(1)
+	f.StationDistances["station_training_melee"] = 0
+	local near = request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" })
+	assert(near.Ok, near.Reason)
+end)
+
+test("an active training session stops on the next settlement when the player leaves the station, and the absent interval is never credited", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.TrainingBegin, { StationId = "station_training_melee" }).Ok)
+	f.Advance(3) -- three at-station seconds credited
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 3)
+	f.StationDistances["station_training_melee"] = 999 -- walk away
+	f.Advance(5) -- the next heartbeat tick revalidates proximity, fails closed, and clears the session
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 3) -- absent time not credited
+	f.StationDistances["station_training_melee"] = 0 -- return to the station
+	f.Advance(5) -- but the session is gone; nothing is retroactively recovered
+	equal(assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee)).XP, 3)
+	local ended = request(f, 7, RequestIds.TrainingEnd, {})
+	equal(ended.Ok, false)
+end)
+
+test("station upgrade is server-gated on physical station proximity", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.Composition.Services.Economy.CreditGold(7, 100))
+	f.StationDistances["station_training_melee"] = 999
+	local far = request(f, 7, RequestIds.PlotUpgradeStation, { StationId = "station_training_melee" })
+	equal(far.Ok, false)
+	equal(far.Reason, "TooFarFromStation")
+	f.Advance(1)
+	f.StationDistances["station_training_melee"] = 0
+	local near = request(f, 7, RequestIds.PlotUpgradeStation, { StationId = "station_training_melee" })
+	assert(near.Ok, near.Reason)
+	equal(near.Result.Tier, 2)
+end)
+
+test("Forge crafting is server-gated on physical Forge proximity", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.Composition.Services.Inventory.AddStack(7, "item_iron_ore", 4))
+	f.ForgeDistance.Value = 999
+	local far = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar" })
+	equal(far.Ok, false)
+	equal(far.Reason, "TooFarFromForge")
+	f.Advance(1)
+	f.ForgeDistance.Value = 0
+	local near = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar" })
+	assert(near.Ok, near.Reason)
 end)
 
 -- ===== Economy / Equipment / Crafting / Mastery / Ascension routing =====

@@ -19,6 +19,7 @@ local Store = require(script.Parent.PlayerData.Store)
 local PlayerDataService = require(script.Parent.PlayerData.Service)
 local Composition = require(script.Parent.Composition.Service)
 local World = require(script.Parent.World.Service)
+local StarterKit = require(script.Parent.StarterKit.Service)
 
 local storeName = if RunService:IsStudio() then "AdventurersRise_PlayerData_Development" else "AdventurersRise_PlayerData"
 local store = Store.New(DataStoreService:GetDataStore(storeName), {
@@ -53,6 +54,8 @@ local world = World.New({
 local worldAdapters = {
 	CombatDistanceProvider = world.CombatDistanceProvider,
 	GatheringNodeResolver = world.GatheringNodeResolver,
+	StationDistanceProvider = world.StationDistanceProvider,
+	ForgeDistanceProvider = world.ForgeDistanceProvider,
 }
 
 local rng = Random.new()
@@ -77,6 +80,19 @@ local composition = Composition.New(playerData, {
 -- players, so a player present at boot still gets an observed ready event and the automatic
 -- offline-return claim.
 composition.Start()
+
+-- First-time starter kit: granted server-side, exactly once per player, and equipped only into
+-- empty slots. Subscribed before PlayerData.Start() (like Composition) so a player already
+-- connected at boot still receives it, and after composition.Start() so composition's own ready
+-- handler runs first. Failures are logged and simply retried on the next ready session.
+local starterKit = StarterKit.New(playerData, composition.Services.Inventory, composition.Services.Equipment)
+playerData.OnReady(function(userId)
+	local _, reason = starterKit.EnsureForUser(userId)
+	if reason then
+		warn(("[Bootstrap] Starter kit failed for %d: %s"):format(userId, tostring(reason)))
+	end
+end)
+
 playerData.Start()
 
 -- Bind the physical scene to repository Enemy runtime state: spawn the provisional Goblins and the
