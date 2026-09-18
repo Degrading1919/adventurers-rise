@@ -47,9 +47,12 @@ export type Enemies = {
 -- Trusted enemy-attack resolver (see Composition/EnemyCombat): given a target userId and an Enemy
 -- runtime snapshot it decides aggression, applies the enemy's authoritative Damage to runtime health,
 -- awards Defense XP, and reports death. World supplies only the physical facts (range, cooldown).
+-- Every method World actually invokes is declared here so Start can reject an incomplete object up
+-- front: ClearEnemy is called on an enemy's death/respawn to drop that RuntimeId's provocation state.
 export type EnemyCombat = {
 	read ResolveAttack: (number, any) -> (any?, string?),
 	read OnSpawn: (number) -> (),
+	read ClearEnemy: (string) -> (),
 }
 
 export type Runtime = {
@@ -319,9 +322,13 @@ function Service.New(runtime: Runtime)
 		end
 	end
 
-	local function markDead(record: EnemyRecord)
+	local function markDead(record: EnemyRecord, enemyCombat: EnemyCombat)
 		record.Model:SetAttribute(ATTR_ENEMY_ALIVE, false)
 		record.RespawnAt = runtime.Clock() + RESPAWN_SECONDS
+		-- Drop provocation as soon as the enemy dies, not at the later respawn: a dead enemy has no
+		-- active engagement, so retaliation must not linger through the respawn delay. Its cooldown and
+		-- runtime->model mapping are cleared defensively at respawn, when the RuntimeId is retired.
+		enemyCombat.ClearEnemy(record.RuntimeId)
 		local body = record.Model.PrimaryPart
 		if body then
 			body.Transparency = 0.7
@@ -332,8 +339,9 @@ function Service.New(runtime: Runtime)
 		local previousId = record.RuntimeId
 		enemies.Remove(previousId)
 		enemyModels[previousId] = nil
-		-- The old RuntimeId is gone: drop its stale attack-cooldown timestamp and any provocation so a
-		-- fresh instance starts clean (no inherited cooldown, no inherited retaliation).
+		-- The old RuntimeId is retired: drop its stale attack-cooldown timestamp and runtime->model
+		-- mapping so a fresh instance starts clean. Provocation was already cleared at death (markDead);
+		-- clearing it again here is defensive/idempotent, covering any path that retires an id directly.
 		lastAttackAt[previousId] = nil
 		enemyCombat.ClearEnemy(previousId)
 		local state, reason = enemies.Create(record.DefinitionId)
@@ -356,7 +364,7 @@ function Service.New(runtime: Runtime)
 			else
 				local snapshot = enemies.GetSnapshot(record.RuntimeId)
 				if snapshot and snapshot.Alive == false then
-					markDead(record)
+					markDead(record, enemyCombat)
 				end
 			end
 		end
@@ -421,7 +429,10 @@ function Service.New(runtime: Runtime)
 			"World.Start requires the repository Enemies service"
 		)
 		assert(
-			type(enemyCombat) == "table" and type(enemyCombat.ResolveAttack) == "function" and type(enemyCombat.OnSpawn) == "function",
+			type(enemyCombat) == "table"
+				and type(enemyCombat.ResolveAttack) == "function"
+				and type(enemyCombat.OnSpawn) == "function"
+				and type(enemyCombat.ClearEnemy) == "function",
 			"World.Start requires the enemy-combat resolver"
 		)
 

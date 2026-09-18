@@ -1,9 +1,14 @@
-"""Run World's pure target-selection behavior checks.
+"""Run World's target-selection and enemy-lifecycle behavior checks.
 
 World is Studio-context: its module body references Roblox instance types (Players, Model, BasePart,
 ...), so it is not standalone type-analyzable (same reason it is excluded from the composition
-analyzer set). Its syntax is still covered by the whole-source luau-compile below; only the pure,
-Roblox-free World.SelectAttackTarget is exercised behaviorally here.
+analyzer set). Its syntax is still covered by the whole-source luau-compile below.
+
+Behaviorally, World.spec exercises the pure, Roblox-free World.SelectAttackTarget directly, and drives
+World.New/Start against a minimal in-spec stub of the Roblox surface the module touches to assert the
+enemy-lifecycle facts (Start's runtime-contract validation, and provocation cleared at an enemy's
+death). A live two-player Studio session still cannot be driven headlessly, so multiplayer targeting
+across real players remains covered by SelectAttackTarget's deterministic checks plus Studio playtest.
 """
 
 import argparse
