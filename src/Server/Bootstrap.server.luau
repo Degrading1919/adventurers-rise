@@ -99,7 +99,7 @@ playerData.Start()
 -- shared Chieftain at their tagged markers, map each physical instance to a repository runtime ID,
 -- and run the minimal death/respawn behavior needed to validate the loop. Enemies is the authority;
 -- the physical models are only its presentation.
-world.Start(composition.Services.Enemies)
+world.Start(composition.Services.Enemies, composition.Services.EnemyCombat)
 
 -- Studio-only diagnostic seam so MCP-driven verification can exercise the real server-authoritative
 -- request path and seed a test player through the real services. Guarded to Studio, so it never

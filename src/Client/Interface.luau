@@ -83,7 +83,7 @@ function Interface.New(player: Player)
 
 	-- ===== HUD (top-left): Gold + slice skill levels =====
 	local hud = make("Frame", {
-		Size = UDim2.new(0, 210, 0, 132),
+		Size = UDim2.new(0, 210, 0, 158),
 		Position = UDim2.new(0, 10, 0, 10),
 		BackgroundColor3 = COLORS.Panel,
 		BackgroundTransparency = 0.1,
@@ -100,8 +100,13 @@ function Interface.New(player: Player)
 		Font = Enum.Font.GothamBold, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Left,
 		TextColor3 = Color3.fromRGB(240, 210, 90), Text = "Gold: --", LayoutOrder = 0,
 	}, hud)
+	local healthLabel = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left,
+		TextColor3 = Color3.fromRGB(230, 90, 90), Text = "Health: --", LayoutOrder = 1,
+	}, hud)
 	local skillLabels: { [string]: TextLabel } = {}
-	local order = 1
+	local order = 2
 	for _, skillId in SKILL_ORDER do
 		skillLabels[skillId] = make("TextLabel", {
 			Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1,
@@ -314,6 +319,9 @@ function Interface.New(player: Player)
 		lastState = state
 		if type(state) ~= "table" then return end
 		goldLabel.Text = "Gold: " .. tostring(state.Gold)
+		if state.Health then
+			healthLabel.Text = ("Health: %d / %d"):format(math.floor(state.Health.Health + 0.5), state.Health.MaxHealth)
+		end
 		if state.Skills then
 			for _, skillId in SKILL_ORDER do
 				local s = state.Skills[skillId]

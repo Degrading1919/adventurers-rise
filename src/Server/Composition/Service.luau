@@ -19,12 +19,15 @@ local BossesService = require(script.Parent.Parent.Bosses.Service)
 local AscensionService = require(script.Parent.Parent.Ascension.Service)
 local MasteryService = require(script.Parent.Parent.Mastery.Service)
 local OfflineTrainingService = require(script.Parent.Parent.OfflineTraining.Service)
+local PlayerHealthService = require(script.Parent.Parent.PlayerHealth.Service)
 
 local RequestIds = require(game:GetService("ReplicatedStorage").Shared.RequestIds)
 local GatheringSessions = require(script.Parent.GatheringSessions)
 local TrainingSessions = require(script.Parent.TrainingSessions)
 local CombatRewards = require(script.Parent.CombatRewards)
+local EnemyCombat = require(script.Parent.EnemyCombat)
 local ReadModel = require(script.Parent.ReadModel)
+local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
 
 export type PlayerData = {
 	read GetSnapshot: (number) -> any?,
@@ -71,6 +74,16 @@ local MINIMUM_REQUEST_INTERVAL_SECONDS = 0.05
 -- upgrade, or craft at a physical station/Forge. Kept a little larger than the client's presentation
 -- radius so anything the client offers the server accepts, without letting a distant player interact.
 local INTERACTION_RANGE_STUDS = 18
+-- Provisional runtime combat balance. Max player health, and the difficulty-scaled Defense combat XP
+-- (docs/DESIGN_SOURCE_OF_TRUTH.md): per meaningful hit taken, Defense XP =
+-- clamp(Base + PerLevel * (enemyLevel - playerLevel), Minimum, Maximum). It scales with enemy
+-- difficulty relative to the player, never with damage taken -- trivial fights award ~0, appropriate
+-- and dangerous fights award more up to the cap. Replaceable balance data.
+local MAX_PLAYER_HEALTH = 100
+local DEFENSE_XP_BASE = 2
+local DEFENSE_XP_PER_LEVEL = 1
+local DEFENSE_XP_MINIMUM = 0
+local DEFENSE_XP_MAXIMUM = 6
 -- Provisional cadence for the shared periodic-settlement heartbeat (section 3): frequent enough
 -- that a session's rejected/re-validated interval stays small, not so frequent it becomes a
 -- per-player-per-frame loop -- one shared task settles every active session on each tick.
@@ -170,6 +183,14 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- (stamped from wall/epoch time by Store), so it must be constructed with the wall clock
 	-- (runtime.Now), never the monotonic runtime.Clock used elsewhere in this composition.
 	local offlineTraining = OfflineTrainingService.New(playerData, skills, plots, runtime.Now)
+	-- Runtime (never persisted) player health, and the enemy-attack resolver World's shared heartbeat
+	-- drives. EnemyCombat owns aggression/damage/Defense XP; World owns the physical range/timing and
+	-- the death respawn. Enemy stats and rewards remain owned by the Enemy service above.
+	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH })
+	local enemyCombat = EnemyCombat.New(playerHealth, skills, {
+		DefenseXP = { Base = DEFENSE_XP_BASE, PerLevel = DEFENSE_XP_PER_LEVEL, Minimum = DEFENSE_XP_MINIMUM, Maximum = DEFENSE_XP_MAXIMUM },
+		ProgressionSkillId = SkillIds.Melee,
+	})
 
 	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
 	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock, nearStation)
@@ -188,6 +209,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		Mastery = mastery,
 		Ascension = ascension,
 		OfflineTraining = offlineTraining,
+		PlayerHealth = playerHealth,
 	}, offlineReturnSummaries)
 
 	local composition = {}
@@ -207,6 +229,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		Ascension = ascension,
 		Mastery = mastery,
 		OfflineTraining = offlineTraining,
+		PlayerHealth = playerHealth,
+		-- World's heartbeat drives this to resolve enemy attacks; exposed here so Bootstrap can inject
+		-- it into World.Start alongside the Enemies service.
+		EnemyCombat = enemyCombat,
 	})
 
 	local function onSessionReady(userId: number)
@@ -234,6 +260,8 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		lastRequestAt[userId] = nil
 		gatheringSessions.Clear(userId)
 		trainingSessions.Clear(userId)
+		playerHealth.Clear(userId)
+		enemyCombat.ClearPlayer(userId)
 	end
 
 	function composition.Start()
@@ -351,7 +379,14 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		if type(payload) ~= "table" or type(payload.TargetId) ~= "string" then
 			return nil, "MalformedPayload"
 		end
-		return combatRewards.ResolveMeleeAttack(userId, payload.TargetId)
+		local result, reason = combatRewards.ResolveMeleeAttack(userId, payload.TargetId)
+		if result then
+			-- A real, server-validated hit landed, so this enemy now retaliates against the attacker
+			-- even if they have outgrown it. Provocation is derived only from this success -- the
+			-- client's payload merely named a target, it cannot assert an enemy is provoked.
+			enemyCombat.RecordProvocation(payload.TargetId, userId)
+		end
+		return result, reason
 	end
 
 	handlers[RequestIds.GatheringBegin] = function(userId: number, payload: any): (any?, string?)

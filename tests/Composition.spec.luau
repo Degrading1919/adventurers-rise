@@ -886,6 +886,7 @@ test("the state read model contains the intended player-facing data and omits in
 	assert(state.Mastery[SkillIds.Melee] ~= nil)
 	assert(state.Ascension.RankId ~= nil)
 	assert(state.Ascension.AdeptProgress ~= nil)
+	assert(state.Health ~= nil and state.Health.Health ~= nil and state.Health.MaxHealth ~= nil)
 	equal(state.OfflineFocusSkillId, nil)
 	equal((state :: any).SchemaVersion, nil)
 	equal((state :: any).LastSessionAt, nil)
