@@ -22,10 +22,11 @@ local function validUserId(value: any): boolean
 	return type(value) == "number" and value > 0 and value % 1 == 0 and value <= 9007199254740991
 end
 
-function Service.New(plots: Plots, maximumElapsedSeconds: number, clock: () -> number): Coordinator
+function Service.New(plots: Plots, maximumElapsedSeconds: number, clock: () -> number, isNearStation: (number, string) -> (boolean, string?)): Coordinator
 	assert(type(plots) == "table" and type(plots.GetStation) == "function" and type(plots.AwardTrainingForElapsed) == "function", "TrainingSessions requires Plots")
 	assert(type(maximumElapsedSeconds) == "number" and maximumElapsedSeconds > 0, "TrainingSessions requires a positive chunk boundary")
 	assert(type(clock) == "function", "TrainingSessions requires a trusted server clock")
+	assert(type(isNearStation) == "function", "TrainingSessions requires a trusted station-proximity check")
 
 	local sessions: { [number]: { StationId: string, LastSettledAt: number } } = {}
 	local coordinator = {}
@@ -57,6 +58,15 @@ function Service.New(plots: Plots, maximumElapsedSeconds: number, clock: () -> n
 		local elapsed = now - session.LastSettledAt
 		if elapsed <= 0 then
 			return nil, "NothingToSettle"
+		end
+		-- Server-authoritative proximity revalidation: if the player is no longer physically at the
+		-- station, stop the session now and credit nothing for this interval. The session is cleared,
+		-- so the absent time can never be recovered by a later settlement -- a fresh Begin (which
+		-- requires being back at the station) restarts the settlement clock.
+		local near, nearReason = isNearStation(userId, session.StationId)
+		if not near then
+			sessions[userId] = nil
+			return nil, nearReason or "TooFarFromStation"
 		end
 		local lastResult: any = nil
 		while elapsed > 0 do
@@ -92,6 +102,11 @@ function Service.New(plots: Plots, maximumElapsedSeconds: number, clock: () -> n
 		local station, reason = plots.GetStation(userId, stationId)
 		if not station then
 			return nil, reason
+		end
+		-- Server-authoritative: the player must physically be at the requested station to start.
+		local near, nearReason = isNearStation(userId, stationId)
+		if not near then
+			return nil, nearReason or "TooFarFromStation"
 		end
 		sessions[userId] = { StationId = stationId, LastSettledAt = clock() }
 		return station, nil

@@ -37,6 +37,7 @@ function Controller.New(player: Player, net: any, iface: any)
 
 	local miningActive = false
 	local trainingActive = false
+	local trainingStationId: string? = nil
 	local attackActive = false
 	local currentStationId: string? = nil
 	local currentTarget: string? = nil
@@ -143,6 +144,17 @@ function Controller.New(player: Player, net: any, iface: any)
 			iface.SetStatus("Mining stopped (left the node).")
 			refresh()
 		end
+
+		-- Mirror the server's authoritative training proximity: leaving the station we are training
+		-- at (or wandering to a different one) stops the session. The server also clears it on its
+		-- next settlement; ending here keeps the UI honest and immediate.
+		if trainingActive and currentStationId ~= trainingStationId then
+			net.Request(RequestIds.TrainingEnd, nil)
+			trainingActive = false
+			trainingStationId = nil
+			iface.SetStatus("Training stopped (left the station).")
+			refresh()
+		end
 	end)
 
 	-- ===== Attack (hold) =====
@@ -196,6 +208,7 @@ function Controller.New(player: Player, net: any, iface: any)
 		if trainingActive then
 			net.Request(RequestIds.TrainingEnd, nil)
 			trainingActive = false
+			trainingStationId = nil
 			iface.SetStatus("Training stopped.")
 			refresh()
 		else
@@ -203,9 +216,11 @@ function Controller.New(player: Player, net: any, iface: any)
 				iface.SetStatus("Stand on a training station first.")
 				return
 			end
-			local ok, _, reason = net.Request(RequestIds.TrainingBegin, { StationId = currentStationId })
+			local stationId = currentStationId
+			local ok, _, reason = net.Request(RequestIds.TrainingBegin, { StationId = stationId })
 			if ok then
 				trainingActive = true
+				trainingStationId = stationId
 				iface.SetStatus("Training...")
 			else
 				iface.SetStatus("Train: " .. reasonText(reason))
@@ -253,8 +268,8 @@ function Controller.New(player: Player, net: any, iface: any)
 				local state = refresh()
 				if state then
 					local ret = state.OfflineReturn
-					if ret and ret.Rewarded and ret.AwardedXP and ret.AwardedXP > 0 then
-						iface.SetStatus(("Offline training added %s XP while away."):format(tostring(ret.AwardedXP)))
+					if ret and ret.Rewarded and ret.XPAwarded and ret.XPAwarded > 0 then
+						iface.SetStatus(("Offline training added %s XP while away."):format(tostring(ret.XPAwarded)))
 					end
 					break
 				end

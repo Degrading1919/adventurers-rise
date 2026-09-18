@@ -349,8 +349,14 @@ function Interface.New(player: Player)
 		mineBtn.Text = if ctx.MiningActive then "Stop Mine" else "Mine"
 		mineBtn.BackgroundColor3 = if ctx.MiningActive then COLORS.ButtonOn elseif ctx.NearNode then COLORS.Button else Color3.fromRGB(45, 47, 55)
 
-		forgeBtn.Active = ctx.NearForge == true
-		forgeBtn.AutoButtonColor = ctx.NearForge == true
+		local nearForge = ctx.NearForge == true
+		forgeBtn.Active = nearForge
+		forgeBtn.AutoButtonColor = nearForge
+		-- Once the player walks away from the Forge, the panel/action must stop behaving as usable
+		-- (the server also rejects a far craft). Close it so the buttons can't be tapped from afar.
+		if not nearForge then
+			forgePanel.Visible = false
+		end
 	end
 
 	-- ===== Wire buttons to handlers =====

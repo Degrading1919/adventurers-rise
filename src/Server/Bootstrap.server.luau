@@ -54,6 +54,8 @@ local world = World.New({
 local worldAdapters = {
 	CombatDistanceProvider = world.CombatDistanceProvider,
 	GatheringNodeResolver = world.GatheringNodeResolver,
+	StationDistanceProvider = world.StationDistanceProvider,
+	ForgeDistanceProvider = world.ForgeDistanceProvider,
 }
 
 local rng = Random.new()

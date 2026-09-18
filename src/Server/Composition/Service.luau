@@ -54,6 +54,8 @@ export type Runtime = {
 export type WorldAdapters = {
 	read CombatDistanceProvider: (number, any) -> (number?, string?),
 	read GatheringNodeResolver: (number, string) -> (any?, string?),
+	read StationDistanceProvider: (number, string) -> (number?, string?),
+	read ForgeDistanceProvider: (number) -> (number?, string?),
 }
 export type RequestResult = {
 	Ok: boolean,
@@ -65,6 +67,10 @@ export type RequestResult = {
 -- schema -- the same category of "small replaceable data" every *Definitions module already owns.
 local MELEE_XP_PER_SUCCESSFUL_HIT = 1
 local MINIMUM_REQUEST_INTERVAL_SECONDS = 0.05
+-- Provisional server-authoritative interaction radius (studs) a player must be within to Train at,
+-- upgrade, or craft at a physical station/Forge. Kept a little larger than the client's presentation
+-- radius so anything the client offers the server accepts, without letting a distant player interact.
+local INTERACTION_RANGE_STUDS = 18
 -- Provisional cadence for the shared periodic-settlement heartbeat (section 3): frequent enough
 -- that a session's rejected/re-validated interval stays small, not so frequent it becomes a
 -- per-player-per-frame loop -- one shared task settles every active session on each tick.
@@ -109,7 +115,38 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			and type(runtime.Wait) == "function",
 		"Composition requires a runtime with separate monotonic Clock and wall-clock Now, plus Spawn/Wait"
 	)
-	assert(type(worldAdapters) == "table" and type(worldAdapters.CombatDistanceProvider) == "function" and type(worldAdapters.GatheringNodeResolver) == "function", "Composition requires injected world adapters")
+	assert(
+		type(worldAdapters) == "table"
+			and type(worldAdapters.CombatDistanceProvider) == "function"
+			and type(worldAdapters.GatheringNodeResolver) == "function"
+			and type(worldAdapters.StationDistanceProvider) == "function"
+			and type(worldAdapters.ForgeDistanceProvider) == "function",
+		"Composition requires injected world adapters"
+	)
+
+	-- Server-authoritative physical proximity, derived from the injected world adapters and the
+	-- provisional interaction radius. The client may use its own proximity purely for presentation;
+	-- these are the only proximity checks that gate Training, station upgrades, and Forge crafting.
+	local function nearStation(userId: number, stationId: string): (boolean, string?)
+		local distance, reason = worldAdapters.StationDistanceProvider(userId, stationId)
+		if type(distance) ~= "number" then
+			return false, reason or "StationNotReachable"
+		end
+		if distance > INTERACTION_RANGE_STUDS then
+			return false, "TooFarFromStation"
+		end
+		return true, nil
+	end
+	local function nearForge(userId: number): (boolean, string?)
+		local distance, reason = worldAdapters.ForgeDistanceProvider(userId)
+		if type(distance) ~= "number" then
+			return false, reason or "ForgeNotReachable"
+		end
+		if distance > INTERACTION_RANGE_STUDS then
+			return false, "TooFarFromForge"
+		end
+		return true, nil
+	end
 
 	-- Dependency order: PlayerData (given) -> Skills -> Inventory -> Equipment -> Economy ->
 	-- Plots -> Enemies -> Combat -> Gathering -> Crafting -> Ascension -> Bosses -> Mastery ->
@@ -135,7 +172,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local offlineTraining = OfflineTrainingService.New(playerData, skills, plots, runtime.Now)
 
 	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
-	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock)
+	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock, nearStation)
 	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn)
 
 	local gameplayReady: { [number]: boolean } = {}
@@ -264,6 +301,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		if type(payload) ~= "table" or type(payload.StationId) ~= "string" then
 			return nil, "MalformedPayload"
 		end
+		local near, nearReason = nearStation(userId, payload.StationId)
+		if not near then
+			return nil, nearReason
+		end
 		return plots.UpgradeStation(userId, payload.StationId)
 	end
 
@@ -290,6 +331,11 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	handlers[RequestIds.CraftingCraft] = function(userId: number, payload: any): (any?, string?)
 		if type(payload) ~= "table" or type(payload.RecipeId) ~= "string" then
 			return nil, "MalformedPayload"
+		end
+		-- Crafting happens at the shared Forge; the player must physically be near it.
+		local near, nearReason = nearForge(userId)
+		if not near then
+			return nil, nearReason
 		end
 		return crafting.Craft(userId, payload.RecipeId)
 	end
