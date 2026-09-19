@@ -1248,6 +1248,35 @@ test("shop buy/sell use the server-authoritative catalog price; a client-supplie
 	equal(tooMuch.Ok, false)
 end)
 
+test("the Shop UI's discrete sell path uses EconomySellDiscrete: an owned unequipped sword sells at the authoritative price; an equipped item is rejected", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local shop = assert(assert(request(f, 7, RequestIds.StateGet, nil).Result).Shop)
+	local swordSell = nil
+	for _, entry in shop.Entries do
+		if entry.ItemDefinitionId == "weapon_sword_upgraded" then
+			swordSell = entry.SellPrice
+		end
+	end
+	assert(swordSell ~= nil, "the catalog must list an upgraded-sword sell price")
+	-- Give the player an unequipped upgraded sword (a real owned instance; the UI never fabricates one).
+	local sword = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, "weapon_sword_upgraded"))
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+	-- Sell it, spoofing a huge price in the payload: the server ignores it and credits the catalog price.
+	local sold = request(f, 7, RequestIds.EconomySellDiscrete, { CatalogId = shop.Id, InstanceId = sword.InstanceId, Price = 999999 })
+	assert(sold.Ok, sold.Reason)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + swordSell)
+	-- The instance is gone; it cannot be sold twice (no fabricated ownership).
+	f.Advance(1)
+	equal(request(f, 7, RequestIds.EconomySellDiscrete, { CatalogId = shop.Id, InstanceId = sword.InstanceId }).Ok, false)
+	-- An equipped item is rejected by the existing server validation.
+	local equippedSword = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, "weapon_sword_upgraded"))
+	assert(f.Composition.Services.Equipment.Equip(7, EquipmentSlots.Weapon, equippedSword.InstanceId))
+	f.Advance(1)
+	local equippedSell = request(f, 7, RequestIds.EconomySellDiscrete, { CatalogId = shop.Id, InstanceId = equippedSword.InstanceId })
+	equal(equippedSell.Ok, false)
+end)
+
 test("Ascension: Ascend fails until requirements are met, then succeeds", function()
 	local f = fixture()
 	joinPlayer(f, 7)

@@ -285,6 +285,13 @@ function Controller.New(player: Player, net: any, iface: any)
 		iface.SetStatus(if ok then "Purchased." else ("Buy: " .. reasonText(reason)))
 		refresh()
 	end
+	-- Sells a specific owned discrete item instance; the server validates ownership, the catalog sell
+	-- price, and rejects an equipped/invalid item. The client never sends a price.
+	iface.Handlers.ShopSellDiscrete = function(catalogId: string, instanceId: string)
+		local ok, _, reason = net.Request(RequestIds.EconomySellDiscrete, { CatalogId = catalogId, InstanceId = instanceId })
+		iface.SetStatus(if ok then "Sold." else ("Sell: " .. reasonText(reason)))
+		refresh()
+	end
 
 	-- ===== Ascend =====
 	iface.Handlers.Ascend = function()

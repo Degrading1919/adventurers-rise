@@ -78,6 +78,7 @@ function Interface.New(player: Player)
 		ShopBuy = function(_catalogId: string, _definitionId: string, _amount: number) end,
 		ShopSell = function(_catalogId: string, _definitionId: string, _amount: number) end,
 		ShopBuyDiscrete = function(_catalogId: string, _definitionId: string) end,
+		ShopSellDiscrete = function(_catalogId: string, _instanceId: string) end,
 	}
 
 	local screen = make("ScreenGui", {
@@ -498,22 +499,41 @@ function Interface.New(player: Player)
 			return
 		end
 		local stacks = (lastState.Inventory and lastState.Inventory.Stacks) or {}
+		local items = (lastState.Inventory and lastState.Inventory.Items) or {}
+		local equippedWeapon = lastState.Equipment and lastState.Equipment[EquipmentSlots.Weapon]
+		local equippedInstance = if type(equippedWeapon) == "table" then equippedWeapon.InstanceId else nil
 		local order2 = 0
 		for _, entry in shop.Entries do
 			local defId = entry.ItemDefinitionId
 			local def = ItemDefinitions.ById[defId]
 			local isStack = def ~= nil and def.Kind == "Stackable"
-			local owned = stacks[defId] or 0
+
+			-- Owned count and, for discrete items, a real owned instance to sell (never fabricated). A
+			-- non-equipped instance is preferred; if only the equipped one is owned the server rejects it.
+			local ownedCount = 0
+			local sellInstanceId: string? = nil
+			local firstOwnedInstanceId: string? = nil
+			if isStack then
+				ownedCount = stacks[defId] or 0
+			else
+				for instanceId, item in items do
+					if item.DefinitionId == defId then
+						ownedCount += 1
+						firstOwnedInstanceId = firstOwnedInstanceId or instanceId
+						if instanceId ~= equippedInstance then
+							sellInstanceId = sellInstanceId or instanceId
+						end
+					end
+				end
+				sellInstanceId = sellInstanceId or firstOwnedInstanceId
+			end
+
 			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 40), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, shopList)
 			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
-			local labelText = itemLabel(defId)
-			if isStack then
-				labelText = ("%s  (have %d)"):format(labelText, owned)
-			end
 			make("TextLabel", {
 				Size = UDim2.new(1, -150, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
 				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-				TextWrapped = true, Text = labelText,
+				TextWrapped = true, Text = ("%s  (have %d)"):format(itemLabel(defId), ownedCount),
 			}, row)
 			if type(entry.BuyPrice) == "number" then
 				local buy = make("TextButton", {
@@ -530,17 +550,24 @@ function Interface.New(player: Player)
 					end
 				end)
 			end
-			-- Selling is offered for stackable resources (discrete-item sale needs an instance and is not
-			-- part of the core slice loop).
-			if isStack and type(entry.SellPrice) == "number" then
+			-- Sell is offered when the catalog lists a sell price and the player actually owns the item:
+			-- a quantity for a stackable resource, or a specific owned instance for a discrete item. The
+			-- server re-validates the price and rejects equipped/invalid items.
+			local canSell = type(entry.SellPrice) == "number" and (if isStack then ownedCount > 0 else sellInstanceId ~= nil)
+			if canSell then
 				local sell = make("TextButton", {
 					Size = UDim2.new(0, 66, 0, 28), Position = UDim2.new(1, -74, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
 					BackgroundColor3 = COLORS.Button, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text,
 					Text = ("Sell %d"):format(entry.SellPrice),
 				}, row)
 				make("UICorner", { CornerRadius = UDim.new(0, 6) }, sell)
+				local instanceId = sellInstanceId
 				sell.Activated:Connect(function()
-					handlers.ShopSell(shop.Id, defId, 1)
+					if isStack then
+						handlers.ShopSell(shop.Id, defId, 1)
+					elseif instanceId then
+						handlers.ShopSellDiscrete(shop.Id, instanceId)
+					end
 				end)
 			end
 			order2 += 1
@@ -586,12 +613,15 @@ function Interface.New(player: Player)
 	}, masteryContent)
 	make("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, masteryList)
 
-	-- Compact presentation of an authoritative LockedReason; never recomputed here.
+	-- Compact presentation of an authoritative LockedReason; never recomputed here. Distinguishes the
+	-- three real cases: required skill level, unmet prerequisite node, and insufficient Mastery Points.
 	local function lockedTag(reason: any, requiredLevel: any): string
 		if reason == "InsufficientSkillLevel" then
-			return ("Lv %s"):format(tostring(requiredLevel))
+			return ("Need Lv %s"):format(tostring(requiredLevel))
+		elseif reason == "PrerequisiteNodeNotSelected" then
+			return "Prereq"
 		elseif reason == "InsufficientMasteryPoints" then
-			return "No pts"
+			return "No points"
 		end
 		return "Locked"
 	end
@@ -627,12 +657,19 @@ function Interface.New(player: Player)
 			}, masteryList)
 			order2 += 1
 			for _, node in branch.Nodes do
-				local row = make("Frame", { Size = UDim2.new(1, -6, 0, 32), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, masteryList)
+				local row = make("Frame", { Size = UDim2.new(1, -6, 0, 50), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, masteryList)
 				make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+				-- Two-line node: name, then the authoritative Description so the player understands what
+				-- selecting it changes. Both come from the read model; nothing is computed here.
 				make("TextLabel", {
-					Size = UDim2.new(1, -88, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
-					Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-					TextWrapped = true, Text = node.DisplayName,
+					Size = UDim2.new(1, -88, 0, 18), Position = UDim2.new(0, 8, 0, 5), BackgroundTransparency = 1,
+					Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+					Text = node.DisplayName,
+				}, row)
+				make("TextLabel", {
+					Size = UDim2.new(1, -88, 0, 24), Position = UDim2.new(0, 8, 0, 23), BackgroundTransparency = 1,
+					Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Text = if type(node.Description) == "string" then node.Description else "",
 				}, row)
 				if node.Selected == true then
 					local tag = make("TextLabel", {
