@@ -324,4 +324,129 @@ test("a non-function Smithing modifier provider is rejected", function()
 	equal(ok, false)
 end)
 
+-- ===== Batch crafting (Craft 1 / N / Max, server-authoritative) =====
+
+test("Craft 1 (explicit and default) preserves the existing single-craft behavior", function()
+	local base = fixture()
+	assert(base.Service.Craft(7, IronBarRecipe))
+	local explicit = fixture()
+	local result = assert(explicit.Service.Craft(7, IronBarRecipe, { Quantity = 1 }))
+	equal(result.Quantity, 1)
+	equal(result.SmithingXP, CraftingDefinitions.ById[IronBarRecipe].SmithingXP)
+	-- Same authoritative consumption/output as the default single craft.
+	equal(explicit.Records[7].Inventory.Stacks[IronOre], base.Records[7].Inventory.Stacks[IronOre])
+	equal(explicit.Records[7].Inventory.Stacks[IronBar], base.Records[7].Inventory.Stacks[IronBar])
+end)
+
+test("Craft 5 consumes the aggregate materials and grants the aggregate output and XP", function()
+	local f = fixture()
+	f.Records[7].Inventory.Stacks[IronOre] = 12 -- leaves a non-zero remainder after consuming 10
+	local recipe = CraftingDefinitions.ById[IronBarRecipe]
+	local before = copy(f.Records[7])
+	local result = assert(f.Service.Craft(7, IronBarRecipe, { Quantity = 5 }))
+	equal(result.Quantity, 5)
+	equal(f.Records[7].Inventory.Stacks[IronOre], before.Inventory.Stacks[IronOre] - recipe.Inputs[1].Amount * 5) -- 12 - 10 = 2
+	equal(result.InputsConsumed[IronOre], recipe.Inputs[1].Amount * 5) -- 10 ore consumed
+	equal(f.Records[7].Inventory.Stacks[IronBar], recipe.OutputAmount * 5) -- 5 bars
+	equal(result.SmithingXP, recipe.SmithingXP * 5) -- 30
+	equal(f.Records[7].SkillXP[SkillIds.Smithing], before.SkillXP[SkillIds.Smithing] + recipe.SmithingXP * 5)
+end)
+
+test("Craft Max is computed server-side from current authoritative materials", function()
+	local f = fixture()
+	f.Records[7].Inventory.Stacks[IronOre] = 11 -- 2 ore/bar -> max 5 (one ore left over)
+	local result = assert(f.Service.Craft(7, IronBarRecipe, { Max = true }))
+	equal(result.Quantity, 5)
+	equal(f.Records[7].Inventory.Stacks[IronOre], 1) -- 11 - 10
+	equal(f.Records[7].Inventory.Stacks[IronBar], 5)
+end)
+
+test("a client cannot request an invalid, negative, fractional, or unbounded quantity", function()
+	for _, bad in { 0, -1, 1.5, math.huge, 0 / 0, 1000000000, "5", true } do
+		local f = fixture()
+		local result, reason = f.Service.Craft(7, IronBarRecipe, { Quantity = bad })
+		equal(result, nil)
+		equal(reason, "InvalidQuantity")
+		equal(f.Records[7].Inventory.Stacks[IronOre], 10) -- nothing consumed
+	end
+	-- A non-table request is rejected too.
+	equal(select(2, fixture().Service.Craft(7, IronBarRecipe, 5 :: any)), "InvalidCraftRequest")
+end)
+
+test("insufficient materials fail the whole batch safely (no partial consumption or output)", function()
+	local f = fixture()
+	f.Records[7].Inventory.Stacks[IronOre] = 3 -- only enough for one bar (needs 10 for five)
+	local result, reason = f.Service.Craft(7, IronBarRecipe, { Quantity = 5 })
+	equal(result, nil)
+	equal(reason, "InsufficientItems")
+	equal(f.Records[7].Inventory.Stacks[IronOre], 3) -- unchanged
+	equal(f.Records[7].Inventory.Stacks[IronBar], nil) -- no partial output
+end)
+
+test("an equipment batch creates a distinct instance ID per craft through Inventory", function()
+	local f = fixture()
+	f.Records[7].Inventory.Stacks[IronBar] = 15 -- 3 bars/sword -> 5 swords
+	local result = assert(f.Service.Craft(7, SwordRecipe, { Quantity = 5 }))
+	equal(result.Quantity, 5)
+	equal(#result.OutputInstanceIds, 5)
+	equal(result.OutputInstanceId, result.OutputInstanceIds[1])
+	local seen = {}
+	for _, instanceId in result.OutputInstanceIds do
+		assert(not seen[instanceId], "duplicate instance id: " .. tostring(instanceId))
+		seen[instanceId] = true
+		assert(f.Records[7].Inventory.Items[instanceId] ~= nil, "instance not owned in inventory")
+	end
+	equal(f.Records[7].Inventory.Stacks[IronBar], nil) -- all 15 consumed
+end)
+
+test("Forgemaster material efficiency reduces an equipment batch's cost but never Iron Bar smelting", function()
+	-- Configured full Forgemaster branch (+10%). Sword batch of 20: ceil(3 * 20 * 0.9) = 54 bars (saves 6).
+	local sword = fixture(nil, function() return { MaterialEfficiencyBonus = 0.10 } end)
+	sword.Records[7].Inventory.Stacks[IronBar] = 60
+	local swordResult = assert(sword.Service.Craft(7, SwordRecipe, { Quantity = 20 }))
+	equal(swordResult.InputsConsumed[IronBar], 54)
+	equal(sword.Records[7].Inventory.Stacks[IronBar], 6)
+	-- Iron Bar smelting is NOT equipment, so the same modifier gives no discount: 2 * 20 = 40 ore.
+	local bar = fixture(nil, function() return { MaterialEfficiencyBonus = 0.10 } end)
+	bar.Records[7].Inventory.Stacks[IronOre] = 40
+	local barResult = assert(bar.Service.Craft(7, IronBarRecipe, { Quantity = 20 }))
+	equal(barResult.InputsConsumed[IronOre], 40)
+end)
+
+test("splitting an equivalent equipment quantity cannot beat the deterministic single-batch cost", function()
+	-- base 3 bars, +10%: one batch of 10 costs ceil(3*10*0.9)=27; two batches of 5 cost ceil(13.5)*2=28;
+	-- ten single crafts cost ceil(2.7)*10=30. The single batch is always the cheapest; splitting only
+	-- ever costs the same or more, so there is no rounding exploit.
+	local one = fixture(nil, function() return { MaterialEfficiencyBonus = 0.10 } end)
+	one.Records[7].Inventory.Stacks[IronBar] = 100
+	equal(assert(one.Service.Craft(7, SwordRecipe, { Quantity = 10 })).InputsConsumed[IronBar], 27)
+
+	local split = fixture(nil, function() return { MaterialEfficiencyBonus = 0.10 } end)
+	split.Records[7].Inventory.Stacks[IronBar] = 100
+	assert(split.Service.Craft(7, SwordRecipe, { Quantity = 5 }))
+	assert(split.Service.Craft(7, SwordRecipe, { Quantity = 5 }))
+	local splitConsumed = 100 - split.Records[7].Inventory.Stacks[IronBar]
+	equal(splitConsumed, 28)
+	assert(27 <= splitConsumed, "one batch must never cost more than splitting")
+end)
+
+test("configured real Forgemaster values produce meaningful savings at appropriate batch sizes", function()
+	-- +2% (single node) over a batch of 50 swords: ceil(3*50*0.98)=ceil(147)=147 bars, saving 3 vs 150.
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = 0.02 } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 150
+	local result = assert(f.Service.Craft(7, SwordRecipe, { Quantity = 50 }))
+	equal(result.InputsConsumed[IronBar], 147)
+	equal(f.Records[7].Inventory.Stacks[IronBar], 3)
+	equal(#result.OutputInstanceIds, 50)
+end)
+
+test("Craft Max on an equipment recipe respects Forgemaster efficiency and the batch bound", function()
+	-- +10% efficiency, 100 bars: max N with ceil(3*N*0.9) <= 100 -> floor(100/2.7)=37 (ceil(99.9)=100).
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = 0.10 } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 100
+	local result = assert(f.Service.Craft(7, SwordRecipe, { Max = true }))
+	equal(result.Quantity, 37)
+	equal(result.InputsConsumed[IronBar], 100) -- ceil(3*37*0.9) = ceil(99.9) = 100
+end)
+
 print(("%d Crafting checks passed"):format(passed))

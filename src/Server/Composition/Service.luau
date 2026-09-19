@@ -440,7 +440,15 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		if not near then
 			return nil, nearReason
 		end
-		return crafting.Craft(userId, payload.RecipeId)
+		-- Forward the requested batch shape; Crafting authoritatively validates the quantity and, for
+		-- Max, computes the affordable amount itself. Max takes precedence over an explicit Quantity.
+		local craftRequest: any = nil
+		if payload.Max == true then
+			craftRequest = { Max = true }
+		elseif payload.Quantity ~= nil then
+			craftRequest = { Quantity = payload.Quantity }
+		end
+		return crafting.Craft(userId, payload.RecipeId, craftRequest)
 	end
 
 	handlers[RequestIds.AscensionAscend] = function(userId: number, payload: any): (any?, string?)

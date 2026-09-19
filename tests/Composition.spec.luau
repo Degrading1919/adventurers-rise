@@ -1179,6 +1179,30 @@ test("Crafting: a valid recipe craft succeeds; an unknown recipe fails", functio
 	equal(fail.Ok, false)
 end)
 
+test("batch crafting is reachable through the CraftingCraft request: Craft N and Craft Max are server-authoritative", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.Composition.Services.Inventory.AddStack(7, "item_iron_ore", 12))
+	-- Craft 5 bars in one authoritative batch: 10 ore -> 5 bars, 2 ore left.
+	local craft5 = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Quantity = 5 })
+	assert(craft5.Ok, craft5.Reason)
+	equal(craft5.Result.Quantity, 5)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_bar, 5)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 2)
+	-- Craft Max computes the affordable quantity server-side (2 ore -> exactly 1 more bar).
+	f.Advance(1)
+	local craftMax = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Max = true })
+	assert(craftMax.Ok, craftMax.Reason)
+	equal(craftMax.Result.Quantity, 1)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_bar, 6)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, nil)
+	-- A client cannot request an invalid quantity; the server rejects it and nothing is crafted.
+	f.Advance(1)
+	local invalid = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Quantity = -3 })
+	equal(invalid.Ok, false)
+	equal(invalid.Reason, "InvalidQuantity")
+end)
+
 test("Mastery: a valid node selection succeeds; an unmet node fails", function()
 	local f = fixture()
 	joinPlayer(f, 7)
@@ -1310,9 +1334,38 @@ test("the state read model contains the intended player-facing data and omits in
 	assert(state.Ascension.AdeptProgress ~= nil)
 	assert(state.Health ~= nil and state.Health.Health ~= nil and state.Health.MaxHealth ~= nil)
 	assert(state.Shop ~= nil and state.Shop.Id == "shop_hub" and type(state.Shop.Entries) == "table")
+	assert(type(state.Recipes) == "table" and #state.Recipes > 0)
 	equal(state.OfflineFocusSkillId, nil)
 	equal((state :: any).SchemaVersion, nil)
 	equal((state :: any).LastSessionAt, nil)
+end)
+
+test("the read model surfaces sanitized Smithing recipe requirements for the Forge panel", function()
+	local CraftingDefinitions = require("CraftingDefinitions")
+	local f = fixture()
+	joinPlayer(f, 7)
+	local recipes = assert(assert(request(f, 7, RequestIds.StateGet, {}).Result).Recipes)
+	local ironBar = nil
+	for _, recipe in recipes do
+		if recipe.RecipeId == "recipe_iron_bar" then
+			ironBar = recipe
+		end
+	end
+	assert(ironBar ~= nil, "the iron bar recipe must be surfaced")
+	local source = CraftingDefinitions.ById.recipe_iron_bar
+	equal(ironBar.OutputItemId, source.OutputItemId)
+	equal(ironBar.OutputAmount, source.OutputAmount)
+	equal(ironBar.RequiredSmithingLevel, source.RequiredSmithingLevel)
+	equal(ironBar.SmithingXP, source.SmithingXP)
+	equal(ironBar.Inputs[1].ItemDefinitionId, source.Inputs[1].ItemDefinitionId)
+	equal(ironBar.Inputs[1].Amount, source.Inputs[1].Amount)
+	-- Only presentation keys are surfaced (no internal recipe fields like DurationSeconds).
+	for key in ironBar do
+		assert(
+			key == "RecipeId" or key == "OutputItemId" or key == "OutputAmount" or key == "RequiredSmithingLevel" or key == "SmithingXP" or key == "Inputs",
+			"leaked recipe field: " .. tostring(key)
+		)
+	end
 end)
 
 test("the read model surfaces the hub shop's authoritative prices (sanitized) without duplicating catalog internals", function()
