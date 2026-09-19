@@ -386,9 +386,11 @@ test("each eligible participant rolls independently for the rare reward alongsid
 	equal(result.Participants[1].UserId, 801)
 	equal(result.Participants[1].RareGranted, true)
 	equal(result.Participants[1].RareItemDefinitionId, RareItem)
+	equal(result.Participants[1].RareItemAmount, 1) -- presentation companion, mirrors the granted amount
 	equal(result.Participants[2].UserId, 802)
 	equal(result.Participants[2].RareGranted, false)
 	equal(result.Participants[2].RareItemDefinitionId, nil)
+	equal(result.Participants[2].RareItemAmount, nil)
 
 	-- The guaranteed Iron Bar and Gold go to both participants regardless of their rare outcome.
 	equal(f.Records[801].Gold, ChieftainGold)

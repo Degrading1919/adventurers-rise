@@ -14,6 +14,7 @@ local RequestIds = require(Shared:WaitForChild("RequestIds"))
 local GatheringNodeIds = require(Shared:WaitForChild("GatheringNodeIds"))
 local AscensionIds = require(Shared:WaitForChild("AscensionIds"))
 local EquipmentSlots = require(Shared:WaitForChild("EquipmentSlots"))
+local EventIds = require(Shared:WaitForChild("EventIds"))
 
 local INTERACT_RADIUS = 14
 local TARGET_RADIUS = 60
@@ -270,6 +271,17 @@ function Controller.New(player: Player, net: any, iface: any)
 		iface.SetStatus(if ok then "Offline focus updated." else ("Offline focus: " .. reasonText(reason)))
 		refresh()
 	end
+
+	-- ===== Server -> client presentation events =====
+	-- Receive pushed, sanitized player-specific outcomes and present them. This is display only: the
+	-- client cannot send on this channel, and it never grants anything from a received event.
+	net.OnEvent(function(eventId: string, payload: any)
+		if eventId == EventIds.BossPersonalReward then
+			iface.ShowBossReward(payload)
+			-- The reward already changed authoritative state server-side; re-read so the HUD reflects it.
+			refresh()
+		end
+	end)
 
 	-- ===== Startup: wait for a ready session, then poll state =====
 	function controller.Start()
