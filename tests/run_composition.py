@@ -89,7 +89,7 @@ local scripts = {{
     PlayerDataService = {{ Parent = {{ Schema = "PlayerDataSchema", Store = "PlayerDataStore" }} }},
     CompositionCombatRewards = {{ Parent = {{ Parent = {{ Enemies = {{ Definitions = "EnemyDefinitions" }} }} }} }},
     CompositionEnemyCombat = {{ Parent = {{ Parent = {{ Enemies = {{ Definitions = "EnemyDefinitions" }} }} }} }},
-    CompositionReadModel = {{ Parent = {{ Parent = {{ Plots = {{ StationDefinitions = "StationDefinitions" }} }} }} }},
+    CompositionReadModel = {{ Parent = {{ Parent = {{ Plots = {{ StationDefinitions = "StationDefinitions" }}, Economy = {{ ShopCatalog = "ShopCatalog" }} }} }} }},
     CompositionService = {{
         Parent = {{
             GatheringSessions = "CompositionGatheringSessions",
@@ -188,6 +188,7 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Parent.Enemies.Definitions)', 'require("./EnemyDefinitions")')
             elif name == "CompositionReadModel":
                 source = source.replace('require(script.Parent.Parent.Plots.StationDefinitions)', 'require("./StationDefinitions")')
+                source = source.replace('require(script.Parent.Parent.Economy.ShopCatalog)', 'require("./ShopCatalog")')
             elif name == "CompositionService":
                 source = source.replace('require(script.Parent.Parent.Skills.Curves)', 'require("./SkillCurves")')
                 source = source.replace('require(script.Parent.Parent.Skills.Service)', 'require("./SkillsService")')

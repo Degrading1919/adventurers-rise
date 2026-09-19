@@ -1192,6 +1192,91 @@ test("Mastery: a valid node selection succeeds; an unmet node fails", function()
 	equal(fail.Ok, false)
 end)
 
+test("the Mastery UI paths use only the authoritative select/respec requests; the read model carries the outcome the client presents", function()
+	-- The client's Skills panel selects and respecs through exactly these requests and then re-reads
+	-- state; it never computes points, node states, or respec cost itself.
+	local f = fixture()
+	joinPlayer(f, 7)
+	setSkillLevel(f, 7, SkillIds.Melee, 5) -- earns 1 Mastery point
+	local firstNode = MasteryIds.Nodes.MeleeMight[1]
+	assert(request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Melee, NodeId = firstNode }).Ok)
+	f.Advance(1)
+	local selected = assert(request(f, 7, RequestIds.StateGet, nil).Result).Mastery[SkillIds.Melee]
+	equal(selected.SpentPoints, 1)
+	equal(selected.AvailablePoints, 0)
+	equal(selected.Branches[1].Nodes[1].Selected, true) -- authoritative node state the client renders
+	-- Respec through the authoritative request; the first respec is free.
+	f.Advance(1)
+	assert(request(f, 7, RequestIds.MasteryRespec, { SkillId = SkillIds.Melee }).Ok)
+	f.Advance(1)
+	local respecced = assert(request(f, 7, RequestIds.StateGet, nil).Result).Mastery[SkillIds.Melee]
+	equal(respecced.SpentPoints, 0)
+	equal(respecced.AvailablePoints, 1)
+	equal(respecced.Branches[1].Nodes[1].Selected, false)
+	equal(respecced.FreeRespecAvailable, false) -- the free respec was consumed; the client presents this
+end)
+
+test("shop buy/sell use the server-authoritative catalog price; a client-supplied price/gold field is ignored, and validation cannot be bypassed", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.Composition.Services.Economy.CreditGold(7, 100))
+	local shop = assert(assert(request(f, 7, RequestIds.StateGet, nil).Result).Shop)
+	local oreBuy, oreSell = nil, nil
+	for _, entry in shop.Entries do
+		if entry.ItemDefinitionId == "item_iron_ore" then
+			oreBuy = entry.BuyPrice
+			oreSell = entry.SellPrice
+		end
+	end
+	assert(oreBuy ~= nil and oreSell ~= nil)
+	-- Buy 2 ore, spoofing a cheap price and huge gold in the payload: the server ignores both and
+	-- charges the authoritative catalog price.
+	f.Advance(1)
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+	local buy = request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = shop.Id, DefinitionId = "item_iron_ore", Amount = 2, Price = 1, Gold = 999999 })
+	assert(buy.Ok, buy.Reason)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore - oreBuy * 2)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 2)
+	-- Sell 1 ore back at the authoritative sell price.
+	f.Advance(1)
+	local goldBeforeSell = assert(f.Composition.Services.Economy.GetGold(7))
+	assert(request(f, 7, RequestIds.EconomySellStack, { CatalogId = shop.Id, DefinitionId = "item_iron_ore", Amount = 1 }).Ok)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBeforeSell + oreSell)
+	-- An unaffordable purchase is rejected by server validation; nothing is granted.
+	f.Advance(1)
+	local tooMuch = request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = shop.Id, DefinitionId = "item_iron_ore", Amount = 999999 })
+	equal(tooMuch.Ok, false)
+end)
+
+test("the Shop UI's discrete sell path uses EconomySellDiscrete: an owned unequipped sword sells at the authoritative price; an equipped item is rejected", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local shop = assert(assert(request(f, 7, RequestIds.StateGet, nil).Result).Shop)
+	local swordSell = nil
+	for _, entry in shop.Entries do
+		if entry.ItemDefinitionId == "weapon_sword_upgraded" then
+			swordSell = entry.SellPrice
+		end
+	end
+	assert(swordSell ~= nil, "the catalog must list an upgraded-sword sell price")
+	-- Give the player an unequipped upgraded sword (a real owned instance; the UI never fabricates one).
+	local sword = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, "weapon_sword_upgraded"))
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+	-- Sell it, spoofing a huge price in the payload: the server ignores it and credits the catalog price.
+	local sold = request(f, 7, RequestIds.EconomySellDiscrete, { CatalogId = shop.Id, InstanceId = sword.InstanceId, Price = 999999 })
+	assert(sold.Ok, sold.Reason)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + swordSell)
+	-- The instance is gone; it cannot be sold twice (no fabricated ownership).
+	f.Advance(1)
+	equal(request(f, 7, RequestIds.EconomySellDiscrete, { CatalogId = shop.Id, InstanceId = sword.InstanceId }).Ok, false)
+	-- An equipped item is rejected by the existing server validation.
+	local equippedSword = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, "weapon_sword_upgraded"))
+	assert(f.Composition.Services.Equipment.Equip(7, EquipmentSlots.Weapon, equippedSword.InstanceId))
+	f.Advance(1)
+	local equippedSell = request(f, 7, RequestIds.EconomySellDiscrete, { CatalogId = shop.Id, InstanceId = equippedSword.InstanceId })
+	equal(equippedSell.Ok, false)
+end)
+
 test("Ascension: Ascend fails until requirements are met, then succeeds", function()
 	local f = fixture()
 	joinPlayer(f, 7)
@@ -1224,9 +1309,40 @@ test("the state read model contains the intended player-facing data and omits in
 	assert(state.Ascension.RankId ~= nil)
 	assert(state.Ascension.AdeptProgress ~= nil)
 	assert(state.Health ~= nil and state.Health.Health ~= nil and state.Health.MaxHealth ~= nil)
+	assert(state.Shop ~= nil and state.Shop.Id == "shop_hub" and type(state.Shop.Entries) == "table")
 	equal(state.OfflineFocusSkillId, nil)
 	equal((state :: any).SchemaVersion, nil)
 	equal((state :: any).LastSessionAt, nil)
+end)
+
+test("the read model surfaces the hub shop's authoritative prices (sanitized) without duplicating catalog internals", function()
+	local ShopCatalog = require("ShopCatalog")
+	local f = fixture()
+	joinPlayer(f, 7)
+	local shop = assert(assert(request(f, 7, RequestIds.StateGet, {}).Result).Shop)
+	equal(shop.Id, "shop_hub")
+	-- Every surfaced entry mirrors the server catalog's own prices exactly, and only id + buy/sell.
+	local catalog = ShopCatalog.ById.shop_hub
+	local seen = 0
+	for _, entry in shop.Entries do
+		seen += 1
+		local source = catalog.Entries[entry.ItemDefinitionId]
+		assert(source ~= nil, "surfaced a non-catalog item: " .. tostring(entry.ItemDefinitionId))
+		equal(entry.BuyPrice, source.BuyPrice)
+		equal(entry.SellPrice, source.SellPrice)
+		for key in entry do
+			assert(key == "ItemDefinitionId" or key == "BuyPrice" or key == "SellPrice", "leaked catalog field: " .. tostring(key))
+		end
+	end
+	-- Iron Ore is buyable and sellable; the client presents these but never prices anything itself.
+	local ore = nil
+	for _, entry in shop.Entries do
+		if entry.ItemDefinitionId == "item_iron_ore" then
+			ore = entry
+		end
+	end
+	assert(ore ~= nil and ore.BuyPrice ~= nil and ore.SellPrice ~= nil)
+	assert(seen > 0)
 end)
 
 test("returned read-model tables are copy-isolated", function()

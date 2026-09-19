@@ -4,6 +4,12 @@ local Shared = game:GetService("ReplicatedStorage").Shared
 local SkillIds = require(Shared.SkillIds)
 local AscensionIds = require(Shared.AscensionIds)
 local StationDefinitions = require(script.Parent.Parent.Plots.StationDefinitions)
+local ShopCatalog = require(script.Parent.Parent.Economy.ShopCatalog)
+
+-- The one hub shop for the vertical slice. Its prices live server-side (ShopCatalog); the client needs
+-- them only to present buy/sell options, so a sanitized copy is surfaced here rather than duplicated
+-- client-side. Purchase/sell validation and Gold math remain entirely server-authoritative.
+local HUB_SHOP_ID = "shop_hub"
 
 -- Composes existing service-owned, already copy-isolated reads into one compact player-facing
 -- snapshot. Owns no persistence of its own and never returns internal session/save metadata
@@ -125,6 +131,26 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			return nil, healthReason
 		end
 
+		-- Sanitized hub-shop catalog: only the item id and its (optional) buy/sell prices, sorted for a
+		-- stable order. Never the internal catalog structure. Prices are presentation only; every actual
+		-- purchase/sale re-validates the price and Gold server-side through the Economy requests.
+		local shop: any = nil
+		local hubCatalog = ShopCatalog.ById[HUB_SHOP_ID]
+		if hubCatalog then
+			local entries: { { ItemDefinitionId: string, BuyPrice: number?, SellPrice: number? } } = {}
+			for _, entry in hubCatalog.Entries do
+				table.insert(entries, {
+					ItemDefinitionId = entry.ItemDefinitionId,
+					BuyPrice = entry.BuyPrice,
+					SellPrice = entry.SellPrice,
+				})
+			end
+			table.sort(entries, function(a, b): boolean
+				return (a.ItemDefinitionId :: string) < (b.ItemDefinitionId :: string)
+			end)
+			shop = { Id = HUB_SHOP_ID, Entries = entries }
+		end
+
 		return {
 			Gold = gold,
 			Skills = skills,
@@ -137,6 +163,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 				AdeptProgress = adeptProgress,
 			},
 			Health = health,
+			Shop = shop,
 			OfflineFocusSkillId = focusSkillId,
 			-- Retained only for the current session (composition clears it on disconnect); copied
 			-- here so a caller mutating the returned model can never affect what a later read sees.
