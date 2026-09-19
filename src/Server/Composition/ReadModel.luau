@@ -5,6 +5,7 @@ local SkillIds = require(Shared.SkillIds)
 local AscensionIds = require(Shared.AscensionIds)
 local StationDefinitions = require(script.Parent.Parent.Plots.StationDefinitions)
 local ShopCatalog = require(script.Parent.Parent.Economy.ShopCatalog)
+local CraftingDefinitions = require(script.Parent.Parent.Crafting.Definitions)
 
 -- The one hub shop for the vertical slice. Its prices live server-side (ShopCatalog); the client needs
 -- them only to present buy/sell options, so a sanitized copy is surfaced here rather than duplicated
@@ -151,6 +152,28 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			shop = { Id = HUB_SHOP_ID, Entries = entries }
 		end
 
+		-- Sanitized Smithing recipes: the requirements the Forge panel presents (output, required level,
+		-- inputs, base XP), sorted for a stable order. Server-owned recipe data surfaced for presentation
+		-- only; all consumption, output, XP, and batch quantity remain server-authoritative.
+		local recipes: { any } = {}
+		for _, recipe in CraftingDefinitions.ById do
+			local inputs: { { ItemDefinitionId: string, Amount: number } } = {}
+			for _, recipeInput in recipe.Inputs do
+				table.insert(inputs, { ItemDefinitionId = recipeInput.ItemDefinitionId, Amount = recipeInput.Amount })
+			end
+			table.insert(recipes, {
+				RecipeId = recipe.Id,
+				OutputItemId = recipe.OutputItemId,
+				OutputAmount = recipe.OutputAmount,
+				RequiredSmithingLevel = recipe.RequiredSmithingLevel,
+				SmithingXP = recipe.SmithingXP,
+				Inputs = inputs,
+			})
+		end
+		table.sort(recipes, function(a, b): boolean
+			return (a.RecipeId :: string) < (b.RecipeId :: string)
+		end)
+
 		return {
 			Gold = gold,
 			Skills = skills,
@@ -164,6 +187,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			},
 			Health = health,
 			Shop = shop,
+			Recipes = recipes,
 			OfflineFocusSkillId = focusSkillId,
 			-- Retained only for the current session (composition clears it on disconnect); copied
 			-- here so a caller mutating the returned model can never affect what a later read sees.

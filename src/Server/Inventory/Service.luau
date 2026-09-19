@@ -76,6 +76,25 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 		return if inventory then copy(inventory) else nil, reason
 	end
 
+	-- Reads a stackable count from a caller's own transactional `data` snapshot (0 when absent), so an
+	-- in-transaction system (e.g. batch Crafting computing an affordable quantity) reads the same data
+	-- it is about to mutate. Inventory remains the owner of its structure.
+	function service.GetStackFromData(data: any, definitionId: string): (number?, string?)
+		local _, definitionReason = definitionFor(definitionId, "Stackable")
+		if definitionReason then
+			return nil, definitionReason
+		end
+		local inventory = data.Inventory
+		if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
+			return nil, "InvalidInventory"
+		end
+		local amount = inventory.Stacks[definitionId] or 0
+		if amount ~= 0 and not validAmount(amount) then
+			return nil, "InvalidInventory"
+		end
+		return amount, nil
+	end
+
 	function service.GetStackCount(userId: number, definitionId: string): (number?, string?)
 		local _, definitionReason = definitionFor(definitionId, "Stackable")
 		if definitionReason then
