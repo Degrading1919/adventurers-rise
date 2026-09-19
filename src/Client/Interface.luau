@@ -72,6 +72,7 @@ function Interface.New(player: Player)
 		ForgeCraft = function(_recipeId: string) end,
 		Equip = function(_instanceId: string) end,
 		Ascend = function() end,
+		SetOfflineFocus = function(_skillId: string) end,
 	}
 
 	local screen = make("ScreenGui", {
@@ -158,6 +159,7 @@ function Interface.New(player: Player)
 	local upgradeBtn = button("Upgrade", 5)
 	local gearBtn = button("Gear", 6)
 	local ascendBtn = button("Ascend", 7)
+	local offlineBtn = button("Offline", 8)
 
 	-- ===== Panels =====
 	local function panel(titleText: string): (Frame, Frame)
@@ -186,11 +188,13 @@ function Interface.New(player: Player)
 	local forgePanel, forgeContent = panel("Forge — Smithing")
 	local gearPanel, gearContent = panel("Gear — Equipment")
 	local ascendPanel, ascendContent = panel("Ascension — Adept")
+	local offlinePanel, offlineContent = panel("Offline Training")
 
 	local function hideAllPanels()
 		forgePanel.Visible = false
 		gearPanel.Visible = false
 		ascendPanel.Visible = false
+		offlinePanel.Visible = false
 	end
 
 	-- Latest state cache so re-rendering a panel uses current data.
@@ -310,6 +314,72 @@ function Interface.New(player: Player)
 		ascendActionBtn.AutoButtonColor = canAscend
 	end
 
+	-- ---- Offline panel ----
+	-- Player-chosen offline training focus (server owns rates/cap/claim) plus a compact "While You
+	-- Were Away" summary rendered straight from the authoritative offline-return; no rewards are
+	-- computed here. Only the currently supported focus skills (Melee, Defense) are offered.
+	make("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, offlineContent)
+	make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
+		TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, Text = "OFFLINE FOCUS", LayoutOrder = 0,
+	}, offlineContent)
+	local offlineFocusLabel = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 15,
+		TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, Text = "Currently training: --", LayoutOrder = 1,
+	}, offlineContent)
+	local focusRow = make("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundTransparency = 1, LayoutOrder = 2 }, offlineContent)
+	make("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8),
+		VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder,
+	}, focusRow)
+	-- Only the server-supported offline focus skills; the labels are presentation, the SkillIds authoritative.
+	local FOCUS_CHOICES = { { SkillId = SkillIds.Melee, Label = "Melee" }, { SkillId = SkillIds.Defense, Label = "Defense" } }
+	local focusButtons: { [string]: TextButton } = {}
+	for index, choice in FOCUS_CHOICES do
+		local b = make("TextButton", {
+			Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = COLORS.Button, AutoButtonColor = true,
+			Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = COLORS.Text, Text = choice.Label, LayoutOrder = index,
+		}, focusRow)
+		make("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
+		b.Activated:Connect(function() handlers.SetOfflineFocus(choice.SkillId) end)
+		focusButtons[choice.SkillId] = b
+	end
+	make("Frame", { Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = COLORS.PanelAlt, BorderSizePixel = 0, LayoutOrder = 3 }, offlineContent)
+	make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
+		TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, Text = "WHILE YOU WERE AWAY", LayoutOrder = 4,
+	}, offlineContent)
+	local offlineSummary = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 72), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 14,
+		TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true, Text = "", LayoutOrder = 5,
+	}, offlineContent)
+
+	local function renderOffline()
+		if not lastState then return end
+		local focus = lastState.OfflineFocusSkillId
+		offlineFocusLabel.Text = "Currently training: " .. (if focus and SKILL_LABELS[focus] then SKILL_LABELS[focus] else "None selected")
+		for skillId, b in focusButtons do
+			local selected = skillId == focus
+			b.BackgroundColor3 = if selected then COLORS.ButtonOn else COLORS.Button
+			b.Text = if selected then (SKILL_LABELS[skillId] or skillId) .. "  ✓" else (SKILL_LABELS[skillId] or skillId)
+		end
+		-- Straight from the authoritative offline-return summary; the client never recomputes rewards.
+		local ret = lastState.OfflineReturn
+		if type(ret) == "table" and ret.Rewarded == true and type(ret.XPAwarded) == "number" and ret.XPAwarded > 0 then
+			local skillLabel = (ret.FocusSkillId and SKILL_LABELS[ret.FocusSkillId]) or "Your focus skill"
+			local hours = (if type(ret.CreditedElapsedSeconds) == "number" then ret.CreditedElapsedSeconds else 0) / 3600
+			offlineSummary.Text = ("%s gained +%d XP while you were away (%.1f h credited)."):format(skillLabel, math.floor(ret.XPAwarded + 0.5), hours)
+			offlineSummary.TextColor3 = COLORS.Good
+		elseif focus then
+			offlineSummary.Text = ("No offline gains yet. Leave and return, and your %s trains automatically while away."):format(SKILL_LABELS[focus] or "focus")
+			offlineSummary.TextColor3 = COLORS.Dim
+		else
+			offlineSummary.Text = "Pick Melee or Defense above to train it while you're offline."
+			offlineSummary.TextColor3 = COLORS.Dim
+		end
+	end
+
 	-- ===== Public update / context APIs =====
 	local iface: any = {}
 	iface.Handlers = handlers
@@ -336,6 +406,15 @@ function Interface.New(player: Player)
 		forgeInfo.Text = ("Iron Ore: %d    Iron Bars: %d    Smithing: Lv %d"):format(oreCount, barCount, smithLevel)
 		if gearPanel.Visible then renderGear() end
 		if ascendPanel.Visible then renderAscend() end
+		if offlinePanel.Visible then renderOffline() end
+	end
+
+	-- Opens the Offline panel showing the current focus and the latest While You Were Away summary.
+	-- The Controller calls this on a rewarded offline return so the summary surfaces on rejoin.
+	function iface.OpenOfflineReturn()
+		hideAllPanels()
+		renderOffline()
+		offlinePanel.Visible = true
 	end
 
 	-- ctx: { NearStationId: string?, NearStationLabel: string?, NearNode: boolean, NearForge: boolean,
@@ -402,6 +481,7 @@ function Interface.New(player: Player)
 	forgeBtn.Activated:Connect(function() hideAllPanels(); forgePanel.Visible = true end)
 	gearBtn.Activated:Connect(function() hideAllPanels(); renderGear(); gearPanel.Visible = true end)
 	ascendBtn.Activated:Connect(function() hideAllPanels(); renderAscend(); ascendPanel.Visible = true end)
+	offlineBtn.Activated:Connect(function() hideAllPanels(); renderOffline(); offlinePanel.Visible = true end)
 
 	return iface
 end
