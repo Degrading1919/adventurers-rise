@@ -161,24 +161,52 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		return true, nil
 	end
 
-	-- Dependency order: PlayerData (given) -> Skills -> Inventory -> Equipment -> Economy ->
-	-- Plots -> Enemies -> Combat -> Gathering -> Crafting -> Ascension -> Bosses -> Mastery ->
-	-- OfflineTraining -> runtime coordinators -> read model -> request routing. Ascension is built
-	-- before Bosses because Bosses.New requires a real Ascension (RecordBossMilestoneToData);
-	-- Ascension itself has no dependency on Bosses, so this is a one-directional edge, not a cycle.
+	-- Dependency order: PlayerData (given) -> Skills -> Inventory -> Equipment -> Economy -> Mastery ->
+	-- Plots -> Enemies -> Combat -> Gathering -> Crafting -> Ascension -> Bosses -> OfflineTraining ->
+	-- runtime coordinators -> read model -> request routing. Mastery is built right after Economy (its
+	-- only dependencies are PlayerData, Skills, Economy) so its modifier totals can be injected into the
+	-- gameplay systems that consume them (Combat, PlayerHealth/EnemyCombat, Gathering, Crafting).
+	-- Ascension is built before Bosses because Bosses.New requires a real Ascension
+	-- (RecordBossMilestoneToData); Ascension itself has no dependency on Bosses, so this is a
+	-- one-directional edge, not a cycle.
 	local skills = SkillsService.New(playerData, { Curves = SkillCurves })
 	local inventory = InventoryService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
 	local equipment = EquipmentService.New(playerData)
 	local economy = EconomyService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
+	local mastery = MasteryService.New(playerData, skills, economy)
+
+	-- Mastery.GetModifiers stays the single source of truth for selected-node effects; these thin
+	-- adapters hand each consuming system only the totals for the one skill it applies, defaulting to an
+	-- empty table (no bonus) if a snapshot is momentarily unavailable. No node/branch logic is copied,
+	-- and no value here is ever client-supplied.
+	local function modifiersForSkill(userId: number, skillId: string): { [string]: number }
+		local totals = mastery.GetModifiers(userId, skillId)
+		return if type(totals) == "table" then totals else {}
+	end
+	local function meleeModifiers(userId: number): { [string]: number }
+		return modifiersForSkill(userId, SkillIds.Melee)
+	end
+	local function defenseModifiers(userId: number): { [string]: number }
+		return modifiersForSkill(userId, SkillIds.Defense)
+	end
+	local function miningModifiers(userId: number): { [string]: number }
+		return modifiersForSkill(userId, SkillIds.Mining)
+	end
+	-- Crafting reads Smithing modifiers from the same transactional `data` it is mutating (atomic with
+	-- the craft), so this adapter takes the data snapshot rather than a userId.
+	local function smithingModifiersFromData(data: any): { [string]: number }
+		local totals = mastery.GetModifiersFromData(data, SkillIds.Smithing)
+		return if type(totals) == "table" then totals else {}
+	end
+
 	local plots = PlotsService.New(playerData, skills)
 	local enemies = EnemiesService.New({ NewRuntimeId = runtime.NewRuntimeId, RollInteger = runtime.RollInteger })
 	local combatTargetResolver = enemies.CreateCombatTargetResolver(worldAdapters.CombatDistanceProvider)
-	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock)
-	local gathering = GatheringService.New(playerData, equipment, inventory, skills, worldAdapters.GatheringNodeResolver)
-	local crafting = CraftingService.New(playerData, inventory, skills)
+	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock, meleeModifiers)
+	local gathering = GatheringService.New(playerData, equipment, inventory, skills, worldAdapters.GatheringNodeResolver, miningModifiers)
+	local crafting = CraftingService.New(playerData, inventory, skills, smithingModifiersFromData)
 	local ascension = AscensionService.New(playerData, skills)
 	local bosses = BossesService.New(playerData, enemies, economy, inventory, ascension, { Roll01 = runtime.Roll01 })
-	local mastery = MasteryService.New(playerData, skills, economy)
 	-- OfflineTraining compares its elapsed window against PlayerData's persisted LastSessionAt
 	-- (stamped from wall/epoch time by Store), so it must be constructed with the wall clock
 	-- (runtime.Now), never the monotonic runtime.Clock used elsewhere in this composition.
@@ -186,11 +214,14 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- Runtime (never persisted) player health, and the enemy-attack resolver World's shared heartbeat
 	-- drives. EnemyCombat owns aggression/damage/Defense XP; World owns the physical range/timing and
 	-- the death respawn. Enemy stats and rewards remain owned by the Enemy service above.
-	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH })
+	-- Defense Mastery raises this player's maximum health (MaxHealthBonus) and reduces incoming enemy
+	-- damage (IncomingDamageReduction); both are read live from the injected provider so a selection or
+	-- respec takes effect immediately.
+	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH }, defenseModifiers)
 	local enemyCombat = EnemyCombat.New(playerHealth, skills, {
 		DefenseXP = { Base = DEFENSE_XP_BASE, PerLevel = DEFENSE_XP_PER_LEVEL, Minimum = DEFENSE_XP_MINIMUM, Maximum = DEFENSE_XP_MAXIMUM },
 		ProgressionSkillId = SkillIds.Melee,
-	})
+	}, defenseModifiers)
 
 	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
 	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock, nearStation)

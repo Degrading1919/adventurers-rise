@@ -18,6 +18,10 @@ export type DamageResult = {
 export type Configuration = {
 	MaxHealth: number,
 }
+-- Server-owned Mastery modifier totals for a player's Defense tree (see Mastery.GetModifiers, the
+-- single source of truth). PlayerHealth only READS MaxHealthBonus; it never recomputes node logic.
+export type ModifierTotals = { [string]: number }
+export type DefenseModifierProvider = (number) -> ModifierTotals
 
 local Service = {}
 
@@ -29,19 +33,58 @@ local function finitePositive(value: any): boolean
 	return type(value) == "number" and value == value and value > 0 and math.abs(value) < math.huge
 end
 
-function Service.New(configuration: Configuration)
+-- Reads one modifier total defensively; a missing/non-finite entry contributes nothing (never a bonus).
+local function modifierTotal(totals: any, key: string): number
+	if type(totals) ~= "table" then
+		return 0
+	end
+	local value = totals[key]
+	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
+		return 0
+	end
+	return value
+end
+
+function Service.New(configuration: Configuration, defenseModifiers: DefenseModifierProvider?)
 	assert(type(configuration) == "table" and finitePositive(configuration.MaxHealth), "PlayerHealth requires a positive MaxHealth")
-	local maxHealth = configuration.MaxHealth
+	assert(defenseModifiers == nil or type(defenseModifiers) == "function", "PlayerHealth defenseModifiers must be a function when provided")
+	local baseMaxHealth = configuration.MaxHealth
+	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep the fixed base
+	-- max health exactly. Composition injects the real server-authoritative Defense provider.
+	local resolveDefenseModifiers: DefenseModifierProvider = defenseModifiers or function()
+		return {}
+	end
+
+	-- Per-player maximum health, derived live from the player's current Defense Mastery so a selection
+	-- or respec takes effect immediately. MaxHealthBonus is additive (+fraction) and never reduces the
+	-- base below 1. Rounded to a whole number for clean presentation and deterministic clamping.
+	local function resolveMaxHealth(userId: number): number
+		local bonus = math.max(0, modifierTotal(resolveDefenseModifiers(userId), "MaxHealthBonus"))
+		local resolved = math.floor(baseMaxHealth * (1 + bonus) + 0.5)
+		if resolved < 1 then
+			resolved = 1
+		end
+		return resolved
+	end
 
 	-- userId -> current health. A missing entry means "not yet damaged this life" and reads as full,
 	-- so a freshly spawned player is always at maximum without needing an explicit initialisation call.
 	local health: { [number]: number } = {}
 	local service = {}
 
+	-- Reads current health, clamped down to the player's current maximum so a Mastery respec that lowers
+	-- MaxHealthBonus can never leave a player reading above their (now smaller) maximum. The clamp is
+	-- persisted to the authoritative runtime value (not just this returned snapshot), so health hidden
+	-- above a reduced maximum is truly discarded and cannot reappear if Fortitude is re-selected later.
 	local function currentHealth(userId: number): number
+		local max = resolveMaxHealth(userId)
 		local value = health[userId]
 		if value == nil then
-			return maxHealth
+			return max
+		end
+		if value > max then
+			health[userId] = max
+			return max
 		end
 		return value
 	end
@@ -50,8 +93,9 @@ function Service.New(configuration: Configuration)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"
 		end
-		health[userId] = maxHealth
-		return { Health = maxHealth, MaxHealth = maxHealth }, nil
+		local max = resolveMaxHealth(userId)
+		health[userId] = max
+		return { Health = max, MaxHealth = max }, nil
 	end
 
 	function service.Clear(userId: number)
@@ -62,7 +106,7 @@ function Service.New(configuration: Configuration)
 		if not validUserId(userId) then
 			return nil, "InvalidUserId"
 		end
-		return { Health = currentHealth(userId), MaxHealth = maxHealth }, nil
+		return { Health = currentHealth(userId), MaxHealth = resolveMaxHealth(userId) }, nil
 	end
 
 	function service.IsAlive(userId: number): boolean
@@ -91,7 +135,7 @@ function Service.New(configuration: Configuration)
 			current = 0
 		end
 		health[userId] = current
-		return { Health = current, MaxHealth = maxHealth, AppliedDamage = applied, Died = current <= 0 }, nil
+		return { Health = current, MaxHealth = resolveMaxHealth(userId), AppliedDamage = applied, Died = current <= 0 }, nil
 	end
 
 	return table.freeze(service)

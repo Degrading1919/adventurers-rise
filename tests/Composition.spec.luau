@@ -487,6 +487,44 @@ test("an out-of-range target is rejected", function()
 	equal(result.Ok, false)
 end)
 
+-- ===== Mastery effect integration (end-to-end through the composed stack) =====
+-- Prove the real composition actually wires Mastery.GetModifiers into the consuming systems, not just
+-- that each service applies an injected double.
+
+test("selecting a Melee Might node raises real attack damage through the composed stack", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	setSkillLevel(f, 7, SkillIds.Melee, 5) -- earns 1 Mastery point; Might I requires level 5
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[enemy.RuntimeId] = 1
+	local base = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId })
+	assert(base.Ok, base.Reason)
+	equal(base.Result.AppliedDamage, 10) -- starter sword base before any Mastery
+	f.Advance(2) -- clear the attack cooldown
+	local select = request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Melee, NodeId = MasteryIds.Nodes.MeleeMight[1] })
+	assert(select.Ok, select.Reason)
+	local boosted = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId })
+	assert(boosted.Ok, boosted.Reason)
+	-- +2% MeleeDamageBonus from the one selected node (10 -> 10.2), applied by the real provider.
+	assert(boosted.Result.AppliedDamage > 10 and boosted.Result.AppliedDamage < 10.5, "expected a small damage increase, got " .. tostring(boosted.Result.AppliedDamage))
+end)
+
+test("selecting a Defense Fortitude node raises the composed player's maximum health", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	setSkillLevel(f, 7, SkillIds.Defense, 5)
+	local before = request(f, 7, RequestIds.StateGet, nil)
+	assert(before.Ok, before.Reason)
+	equal(before.Result.Health.MaxHealth, 100)
+	local select = request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Defense, NodeId = MasteryIds.Nodes.DefenseFortitude[1] })
+	assert(select.Ok, select.Reason)
+	f.Advance(1) -- clear the per-request throttle before the second StateGet
+	local after = request(f, 7, RequestIds.StateGet, nil)
+	assert(after.Ok, after.Reason)
+	equal(after.Result.Health.MaxHealth, 102) -- floor(100 * 1.02 + 0.5)
+end)
+
 test("a normal Goblin's death pays its authoritative Gold exactly once", function()
 	local f = fixture()
 	joinPlayer(f, 7)
@@ -629,6 +667,48 @@ test("gathering re-validates the node on every periodic settlement; moving out o
 	local ended = request(f, 7, RequestIds.GatheringEnd, {})
 	equal(ended.Ok, false)
 	equal(ended.Reason, "NoActiveGatheringSession")
+end)
+
+test("a real validation failure clears the Gathering session AND discards its fractional ore carry", function()
+	-- Unit-drives the coordinator directly so the carry lifecycle is observable: GatheringIntervalTooShort
+	-- retains the session and its carry (unspent time preserved), while a real validation failure tears
+	-- the session down through the same Clear path that resets the carry.
+	local GatheringSessions = require("CompositionGatheringSessions")
+	local now = 0
+	local resetCalls = {}
+	local nextReason: string? = nil
+	local fakeGathering = {
+		ValidateForBegin = function()
+			return { NodeId = GatheringNodeIds.IronOre }, nil
+		end,
+		GatherForElapsed = function()
+			if nextReason then
+				return nil, nextReason
+			end
+			return { OreAmount = 1 }, nil
+		end,
+		ResetCarry = function(userId: number)
+			table.insert(resetCalls, userId)
+		end,
+	}
+	local coord = GatheringSessions.New(fakeGathering, 60, function()
+		return now
+	end)
+	assert(coord.Begin(7, GatheringNodeIds.IronOre)) -- fresh session resets carry once
+	local afterBegin = #resetCalls
+
+	-- Sub-unit interval: session and carry are retained (unspent time kept for the next tick).
+	now += 0.1
+	nextReason = "GatheringIntervalTooShort"
+	equal(select(2, coord.Settle(7)), "GatheringIntervalTooShort")
+	equal(#resetCalls, afterBegin) -- carry NOT reset
+
+	-- A real validation failure ends the session and discards the carry via Clear.
+	now += 1
+	nextReason = "NodeOutOfRange"
+	equal(select(2, coord.Settle(7)), "NodeOutOfRange")
+	equal(#resetCalls, afterBegin + 1) -- carry reset on failure teardown
+	equal(select(2, coord.Settle(7)), "NoActiveGatheringSession") -- session is gone
 end)
 
 test("long active sessions settle incrementally; a mid-session range loss is never retroactively recovered and total credited time never exceeds real elapsed time", function()

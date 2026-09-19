@@ -45,8 +45,24 @@ export type ValidateResult = {
 	ToolInstanceId: string,
 	ToolDefinitionId: string,
 }
+-- Server-owned Mastery modifier totals for the gatherer's Mining tree (see Mastery.GetModifiers, the
+-- single source of truth). Gathering only READS the totals it cares about; it never recomputes nodes.
+export type ModifierTotals = { [string]: number }
+export type MiningModifierProvider = (number) -> ModifierTotals
 
 local Service = { MaximumElapsedSeconds = 60 }
+
+-- Reads one modifier total defensively; a missing/non-finite entry contributes nothing (never a bonus).
+local function modifierTotal(totals: any, key: string): number
+	if type(totals) ~= "table" then
+		return 0
+	end
+	local value = totals[key]
+	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
+		return 0
+	end
+	return value
+end
 
 local function validUserId(userId: any): boolean
 	return type(userId) == "number" and userId > 0 and userId % 1 == 0 and userId <= 9007199254740991
@@ -68,14 +84,28 @@ local function validMiningTool(data: any): boolean
 	return type(data) == "table" and finitePositive(data.GatheringRateMultiplier)
 end
 
-function Service.New(playerData: PlayerData, equipment: Equipment, inventory: Inventory, skills: Skills, resolveNode: NodeResolver)
+function Service.New(playerData: PlayerData, equipment: Equipment, inventory: Inventory, skills: Skills, resolveNode: NodeResolver, miningModifiers: MiningModifierProvider?)
 	assert(type(playerData) == "table" and type(playerData.GetSnapshot) == "function" and type(playerData.Update) == "function", "Gathering requires PlayerData")
 	assert(type(equipment) == "table" and type(equipment.GetEquippedItem) == "function", "Gathering requires Equipment")
 	assert(type(inventory) == "table" and type(inventory.AddStackToData) == "function", "Gathering requires Inventory")
 	assert(type(skills) == "table" and type(skills.GetStateFromData) == "function" and type(skills.AwardXPToData) == "function", "Gathering requires Skills")
 	assert(type(resolveNode) == "function", "Gathering requires a trusted node resolver")
+	assert(miningModifiers == nil or type(miningModifiers) == "function", "Gathering miningModifiers must be a function when provided")
 	local valid, reason = Definitions.Validate(Definitions.ById)
 	assert(valid, reason)
+	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep exact prior
+	-- ore/XP output. Composition injects the real server-authoritative Mining provider.
+	local resolveMiningModifiers: MiningModifierProvider = miningModifiers or function()
+		return {}
+	end
+
+	-- Server-owned fractional ore remainder per user, carried between settlements of one continuous
+	-- gathering session (the coordinator resets it when a session begins or ends). It is always in
+	-- [0, 1), never persisted, and never sourced from or exposed to the client. Threading it makes
+	-- cumulative ore a pure floor of cumulative (rate * elapsed), so many short settlements yield the
+	-- same total as one long settlement -- the small real Mastery rate bonuses are no longer lost to
+	-- per-settlement flooring at ~1s heartbeat chunk sizes.
+	local oreCarry: { [number]: number } = {}
 
 	local service = {}
 
@@ -185,9 +215,25 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		local toolInstanceId = toolInfo.ToolInstanceId
 		local toolDefinitionId = toolInfo.ToolDefinitionId
 
-		local oreAmount = math.floor(definition.OrePerSecond * mining.GatheringRateMultiplier * elapsedSeconds)
-		local miningXP = definition.MiningXPPerSecond * mining.GatheringRateMultiplier * elapsedSeconds
+		-- Apply the gatherer's Mining Mastery totals to the trusted per-second output. Both bonuses are
+		-- additive fractions clamped to non-negative, and the trusted `elapsedSeconds` is never touched,
+		-- so results stay bounded and fully deterministic (no elapsed-time exploit). GatheringSpeedBonus
+		-- scales the per-second rate (more ore AND more XP per real second); PrimaryYieldBonus enriches
+		-- the ore output only (extra ore per gather, no XP change).
+		local miningModifierTotals = resolveMiningModifiers(userId)
+		local speedMultiplier = 1 + math.max(0, modifierTotal(miningModifierTotals, "GatheringSpeedBonus"))
+		local yieldMultiplier = 1 + math.max(0, modifierTotal(miningModifierTotals, "PrimaryYieldBonus"))
+
+		-- Exact fractional ore this settlement earns, plus the remainder carried from earlier settlements
+		-- of this session. Flooring the running total (rather than each settlement independently) is what
+		-- makes the result chunk-size independent and deterministic.
+		local exactOre = definition.OrePerSecond * mining.GatheringRateMultiplier * elapsedSeconds * speedMultiplier * yieldMultiplier
+		local availableOre = exactOre + (oreCarry[userId] or 0)
+		local oreAmount = math.floor(availableOre)
+		local miningXP = definition.MiningXPPerSecond * mining.GatheringRateMultiplier * elapsedSeconds * speedMultiplier
 		if oreAmount < 1 or oreAmount > 9007199254740991 or not finitePositive(miningXP) then
+			-- Less than one whole unit has accumulated even with the carry. Defer (the coordinator keeps
+			-- the unspent time and retries next tick) and leave the carry untouched, so nothing is lost.
 			return nil, "GatheringIntervalTooShort"
 		end
 
@@ -225,7 +271,17 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		if not ok then
 			return nil, mutationReason or updateReason or "PlayerDataUpdateFailed"
 		end
+		-- Only now that the whole ore is committed do we consume it from the running total, keeping the
+		-- sub-unit remainder for the next settlement. A failed/rolled-back settlement leaves carry intact.
+		oreCarry[userId] = availableOre - oreAmount
 		return result, mutationReason
+	end
+
+	-- Clears a user's fractional ore carry. The session coordinator calls this when a continuous
+	-- gathering session begins or ends, so carry never leaks across sessions and disconnected players
+	-- leave none behind. Dropping an in-progress carry only ever forfeits a sub-unit fraction of ore.
+	function service.ResetCarry(userId: number)
+		oreCarry[userId] = nil
 	end
 
 	return table.freeze(service)

@@ -28,6 +28,10 @@ export type TargetResolver = (number, string) -> (Target?, string?)
 export type Configuration = {
 	MeleeXPPerSuccessfulHit: number,
 }
+-- Server-owned Mastery modifier totals for the attacker's Melee tree (see Mastery.GetModifiers, the
+-- single source of truth). Combat only READS the totals it cares about; it never recomputes node logic.
+export type ModifierTotals = { [string]: number }
+export type MeleeModifierProvider = (number) -> ModifierTotals
 export type AttackResult = {
 	AttackerUserId: number,
 	TargetId: string,
@@ -42,10 +46,28 @@ export type AttackResult = {
 	XPReason: string?,
 }
 
+-- Keeps a fully-stacked attack-interval reduction from ever reaching (or passing) the base interval,
+-- so the effective interval stays strictly positive regardless of future Mastery data. Current slice
+-- data caps a completed Tempo branch at 0.10, well inside this bound.
+local MAX_ATTACK_INTERVAL_REDUCTION = 0.9
+
 local Service = {}
 
 local function finitePositive(value: any): boolean
 	return type(value) == "number" and value == value and value > 0 and math.abs(value) < math.huge
+end
+
+-- Reads one modifier total defensively; a missing or non-finite entry contributes nothing (never a
+-- bonus). Mastery already validates its stored values, so this only fails closed on corruption.
+local function modifierTotal(totals: any, key: string): number
+	if type(totals) ~= "table" then
+		return 0
+	end
+	local value = totals[key]
+	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
+		return 0
+	end
+	return value
 end
 
 local function finiteNonNegative(value: any): boolean
@@ -67,12 +89,18 @@ local function validMelee(data: any): boolean
 		and finitePositive(data.AttackRange)
 end
 
-function Service.New(equipment: Equipment, skills: Skills, resolveTarget: TargetResolver, configuration: Configuration, clock: () -> number)
+function Service.New(equipment: Equipment, skills: Skills, resolveTarget: TargetResolver, configuration: Configuration, clock: () -> number, meleeModifiers: MeleeModifierProvider?)
 	assert(type(equipment) == "table" and type(equipment.GetEquippedItem) == "function", "Combat requires Equipment")
 	assert(type(skills) == "table" and type(skills.AwardXP) == "function", "Combat requires Skills")
 	assert(type(resolveTarget) == "function", "Combat requires a trusted target resolver")
 	assert(type(configuration) == "table" and finitePositive(configuration.MeleeXPPerSuccessfulHit), "Combat requires a positive Melee XP amount")
 	assert(type(clock) == "function", "Combat requires a clock")
+	assert(meleeModifiers == nil or type(meleeModifiers) == "function", "Combat meleeModifiers must be a function when provided")
+	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep exact prior
+	-- behavior. Composition injects the real server-authoritative provider.
+	local resolveMeleeModifiers: MeleeModifierProvider = meleeModifiers or function()
+		return {}
+	end
 
 	local nextAttackAt: { [number]: number } = {}
 	local service = {}
@@ -121,19 +149,28 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 			return nil, "TargetOutOfRange"
 		end
 
+		-- Apply the attacker's Melee Mastery totals to the weapon's base numbers. Damage scales up by
+		-- MeleeDamageBonus; the attack interval scales down by MeleeAttackIntervalReduction (clamped so
+		-- it stays strictly positive). Range and XP are intentionally unmodified in the slice.
+		local meleeModifierTotals = resolveMeleeModifiers(userId)
+		local damageBonus = math.max(0, modifierTotal(meleeModifierTotals, "MeleeDamageBonus"))
+		local intervalReduction = math.clamp(math.max(0, modifierTotal(meleeModifierTotals, "MeleeAttackIntervalReduction")), 0, MAX_ATTACK_INTERVAL_REDUCTION)
+		local effectiveDamage = melee.Damage * (1 + damageBonus)
+		local effectiveInterval = melee.AttackIntervalSeconds * (1 - intervalReduction)
+
 		local request: DamageRequest = {
 			AttackerUserId = userId,
 			TargetId = targetId,
 			WeaponInstanceId = instanceId,
 			WeaponDefinitionId = definition.Id,
-			Damage = melee.Damage,
+			Damage = effectiveDamage,
 		}
 		local appliedDamage, damageReason = target.ApplyDamage(request)
 		if type(appliedDamage) ~= "number" or not finitePositive(appliedDamage) or appliedDamage > request.Damage then
 			return nil, damageReason or "NoMeaningfulDamage"
 		end
 
-		nextAttackAt[userId] = now + melee.AttackIntervalSeconds
+		nextAttackAt[userId] = now + effectiveInterval
 		local _, xpReason = skills.AwardXP(userId, SkillIds.Melee, configuration.MeleeXPPerSuccessfulHit)
 		return {
 			AttackerUserId = userId,
@@ -142,7 +179,7 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 			WeaponDefinitionId = definition.Id,
 			Damage = request.Damage,
 			AppliedDamage = appliedDamage,
-			AttackIntervalSeconds = melee.AttackIntervalSeconds,
+			AttackIntervalSeconds = effectiveInterval,
 			AttackRange = melee.AttackRange,
 			MeleeXP = configuration.MeleeXPPerSuccessfulHit,
 			XPGranted = xpReason == nil,

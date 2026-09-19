@@ -40,6 +40,10 @@ export type Configuration = {
 	-- Skill whose level represents combat progression for the aggression/difficulty comparison.
 	ProgressionSkillId: string,
 }
+-- Server-owned Mastery modifier totals for the target's Defense tree (see Mastery.GetModifiers, the
+-- single source of truth). EnemyCombat only READS IncomingDamageReduction; it never recomputes nodes.
+export type ModifierTotals = { [string]: number }
+export type DefenseModifierProvider = (number) -> ModifierTotals
 export type AttackResult = {
 	Damage: number,
 	Health: number,
@@ -50,10 +54,28 @@ export type AttackResult = {
 	DefenseXPAwarded: boolean,
 }
 
+-- Keeps a fully-stacked incoming-damage reduction below 1 so a landed enemy hit always applies strictly
+-- positive damage (PlayerHealth.ApplyDamage requires it). Current slice data caps a completed Bulwark
+-- branch at 0.10, well inside this bound.
+local MAX_INCOMING_DAMAGE_REDUCTION = 0.9
+
 local Service = {}
 
 local function finitePositive(value: any): boolean
 	return type(value) == "number" and value == value and value > 0 and math.abs(value) < math.huge
+end
+
+-- Reads one modifier total defensively; a missing/non-finite entry contributes nothing (never a
+-- reduction that could be spoofed into free damage immunity).
+local function modifierTotal(totals: any, key: string): number
+	if type(totals) ~= "table" then
+		return 0
+	end
+	local value = totals[key]
+	if type(value) ~= "number" or value ~= value or math.abs(value) == math.huge then
+		return 0
+	end
+	return value
 end
 
 local function finiteNumber(value: any): boolean
@@ -72,10 +94,16 @@ local function validRuntimeId(value: any): boolean
 	return type(value) == "string" and value ~= ""
 end
 
-function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: Configuration)
+function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: Configuration, defenseModifiers: DefenseModifierProvider?)
 	assert(type(playerHealth) == "table" and type(playerHealth.IsAlive) == "function" and type(playerHealth.ApplyDamage) == "function" and type(playerHealth.Reset) == "function", "EnemyCombat requires PlayerHealth")
 	assert(type(skills) == "table" and type(skills.GetState) == "function" and type(skills.AwardXP) == "function", "EnemyCombat requires Skills")
 	assert(type(configuration) == "table" and type(configuration.ProgressionSkillId) == "string", "EnemyCombat requires a progression skill")
+	assert(defenseModifiers == nil or type(defenseModifiers) == "function", "EnemyCombat defenseModifiers must be a function when provided")
+	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep exact prior
+	-- damage. Composition injects the real server-authoritative Defense provider.
+	local resolveDefenseModifiers: DefenseModifierProvider = defenseModifiers or function()
+		return {}
+	end
 	local defenseXP = configuration.DefenseXP
 	assert(
 		type(defenseXP) == "table"
@@ -168,7 +196,12 @@ function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: 
 			return nil, "NotEngaged"
 		end
 
-		local damageResult, damageReason = playerHealth.ApplyDamage(userId, enemyState.Damage)
+		-- Defense Mastery reduces the enemy's authoritative damage before it reaches runtime health. The
+		-- reduction is clamped below 1, so a landed hit always applies strictly positive (never negative
+		-- or zero) damage; a missing/spoofed modifier contributes no reduction.
+		local reduction = math.clamp(math.max(0, modifierTotal(resolveDefenseModifiers(userId), "IncomingDamageReduction")), 0, MAX_INCOMING_DAMAGE_REDUCTION)
+		local incomingDamage = enemyState.Damage * (1 - reduction)
+		local damageResult, damageReason = playerHealth.ApplyDamage(userId, incomingDamage)
 		if not damageResult then
 			return nil, damageReason
 		end
@@ -183,7 +216,7 @@ function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: 
 		end
 
 		return {
-			Damage = enemyState.Damage,
+			Damage = incomingDamage,
 			Health = (damageResult :: any).Health,
 			MaxHealth = (damageResult :: any).MaxHealth,
 			Died = (damageResult :: any).Died,

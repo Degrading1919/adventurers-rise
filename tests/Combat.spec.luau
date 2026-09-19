@@ -41,7 +41,7 @@ local function curve()
 	return { MaximumXP = 6000, Thresholds = thresholds }
 end
 
-local function fixture()
+local function fixture(meleeModifiers)
 	local records = {
 		[7] = {
 			Gold = 25,
@@ -102,7 +102,7 @@ local function fixture()
 	end
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
 	local equipment = Equipment.New(playerData)
-	local service = Combat.New(equipment, skills, resolveTarget, { MeleeXPPerSuccessfulHit = 1 }, function() return clock.Now end)
+	local service = Combat.New(equipment, skills, resolveTarget, { MeleeXPPerSuccessfulHit = 1 }, function() return clock.Now end, meleeModifiers)
 	return {
 		Records = records,
 		PlayerData = playerData,
@@ -213,6 +213,68 @@ test("only meaningful applied damage receives Melee XP and preserves unrelated P
 	equal(f.Records[7].Inventory.Stacks.item_iron_ore, before.Inventory.Stacks.item_iron_ore)
 	equal(next(f.Records[7].Plot.Stations), nil)
 	equal(f.Records[7].ProgressionFlags.flag_intro_complete, true)
+end)
+
+-- ===== Melee Mastery: MeleeDamageBonus + MeleeAttackIntervalReduction =====
+-- The fixture injects a modifier provider standing in for Mastery.GetModifiers(userId, Melee). Clean
+-- binary fractions are used so the applied totals are exact; that Mastery sums node values into these
+-- totals is covered separately in Mastery.spec.
+
+local StarterMelee = ItemDefinitions.ById[StarterSword].Melee
+
+test("no Melee selections preserve the exact base attack", function()
+	local f = fixture(function() return {} end)
+	assert(f.Equipment.Equip(7, EquipmentSlots.Weapon, "starter"))
+	local hit = assert(f.Service.ResolveMeleeAttack(7, "target_goblin"))
+	equal(hit.Damage, StarterMelee.Damage)
+	equal(hit.AppliedDamage, StarterMelee.Damage)
+	equal(hit.AttackIntervalSeconds, StarterMelee.AttackIntervalSeconds)
+end)
+
+test("MeleeDamageBonus scales resolved and applied damage by exactly the provided total", function()
+	local f = fixture(function() return { MeleeDamageBonus = 0.5 } end)
+	assert(f.Equipment.Equip(7, EquipmentSlots.Weapon, "starter"))
+	local hit = assert(f.Service.ResolveMeleeAttack(7, "target_goblin"))
+	equal(hit.Damage, StarterMelee.Damage * 1.5)
+	equal(hit.AppliedDamage, StarterMelee.Damage * 1.5)
+	equal(f.Targets.target_goblin.LastRequest.Damage, StarterMelee.Damage * 1.5)
+end)
+
+test("MeleeAttackIntervalReduction shortens the interval and the enforced cooldown", function()
+	local f = fixture(function() return { MeleeAttackIntervalReduction = 0.25 } end)
+	assert(f.Equipment.Equip(7, EquipmentSlots.Weapon, "starter"))
+	local hit = assert(f.Service.ResolveMeleeAttack(7, "target_goblin"))
+	local expected = StarterMelee.AttackIntervalSeconds * 0.75
+	equal(hit.AttackIntervalSeconds, expected)
+	-- The cooldown now clears at the reduced interval, not the base one.
+	f.Clock.Now += expected - 0.01
+	equal(select(2, f.Service.ResolveMeleeAttack(7, "target_goblin")), "AttackOnCooldown")
+	f.Clock.Now += 0.01
+	assert(f.Service.ResolveMeleeAttack(7, "target_goblin"))
+end)
+
+test("only the provided numeric totals apply; spoofed/unknown values are ignored", function()
+	-- A non-number reduction and an unrelated key must contribute nothing, and the damage total is
+	-- applied exactly once (no re-derivation or double counting on top of Mastery.GetModifiers).
+	local f = fixture(function() return { MeleeDamageBonus = 0.5, MeleeAttackIntervalReduction = "0.9", Junk = 100 } end)
+	assert(f.Equipment.Equip(7, EquipmentSlots.Weapon, "starter"))
+	local hit = assert(f.Service.ResolveMeleeAttack(7, "target_goblin"))
+	equal(hit.Damage, StarterMelee.Damage * 1.5)
+	equal(hit.AttackIntervalSeconds, StarterMelee.AttackIntervalSeconds) -- string reduction ignored
+end)
+
+test("an oversized interval reduction is clamped so the interval stays strictly positive", function()
+	local f = fixture(function() return { MeleeAttackIntervalReduction = 5 } end)
+	assert(f.Equipment.Equip(7, EquipmentSlots.Weapon, "starter"))
+	local hit = assert(f.Service.ResolveMeleeAttack(7, "target_goblin"))
+	assert(hit.AttackIntervalSeconds > 0, "interval must remain strictly positive")
+	assert(hit.AttackIntervalSeconds < StarterMelee.AttackIntervalSeconds, "interval must be reduced")
+	assert(math.abs(hit.AttackIntervalSeconds - StarterMelee.AttackIntervalSeconds * 0.1) < 1e-9, "clamped to a 0.9 reduction")
+end)
+
+test("a non-function Melee modifier provider is rejected", function()
+	local ok = pcall(Combat.New, { GetEquippedItem = function() end }, { AwardXP = function() end }, function() end, { MeleeXPPerSuccessfulHit = 1 }, function() return 0 end, 5)
+	equal(ok, false)
 end)
 
 print(("%d Combat checks passed"):format(passed))

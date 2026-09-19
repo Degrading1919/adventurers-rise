@@ -46,7 +46,7 @@ local function curve()
 	return { MaximumXP = 6000, Thresholds = thresholds }
 end
 
-local function fixture(nextInstanceIds)
+local function fixture(nextInstanceIds, smithingModifiers)
 	local records = {
 		[7] = {
 			Gold = 25,
@@ -94,7 +94,7 @@ local function fixture(nextInstanceIds)
 	}
 	local inventory = Inventory.New(playerData, runtime)
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
-	local service = Crafting.New(playerData, inventory, skills)
+	local service = Crafting.New(playerData, inventory, skills, smithingModifiers)
 	return {
 		Records = records,
 		PlayerData = playerData,
@@ -238,6 +238,90 @@ test("buying recipe inputs from the shop and reselling crafted outputs cannot gu
 	local swordSellPrice = shop.Entries[UpgradedSword].SellPrice
 	local oreCostPerSword = oreBuyPrice * barRecipe.Inputs[1].Amount * swordRecipe.Inputs[1].Amount
 	assert(oreCostPerSword > swordSellPrice)
+end)
+
+-- ===== Smithing Mastery: Forgemaster MaterialEfficiencyBonus (equipment crafts only) =====
+-- Forgemaster is "material efficiency when forging EQUIPMENT" (docs/MASTERY_TREES.md), so the bonus
+-- applies only to recipes whose output is an equippable item, detected from the output item's Equipment
+-- metadata -- never a hard-coded recipe ID. Iron Ore -> Iron Bar smelting is excluded; the upgraded
+-- sword qualifies. Effective cost per input = max(1, ceil(amount * (1 - eff))) -- a SAFE rounding that
+-- never yields a free/negative craft. At the real configured values (+0.02 per node, +0.10 for a full
+-- branch) even the eligible single sword craft rounds to NO change (a whole unit is saved only once
+-- eff >= 1/amount); meaningful realization is blocked on the already-required batch-crafting work. The
+-- above-configured (synthetic) values below only prove the equipment-only mechanism is wired.
+
+test("no Smithing selections consume the recipe's full material cost", function()
+	local f = fixture(nil, function() return {} end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 8) -- 10 - 2
+end)
+
+test("Forgemaster never reduces Iron Bar smelting inputs (non-equipment output), even with a large modifier", function()
+	-- A synthetic, well-above-configured modifier must still be ignored for a smelting recipe.
+	local f = fixture(nil, function() return { MaterialEfficiencyBonus = 0.9 } end)
+	assert(f.Service.Craft(7, IronBarRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronOre], 8) -- full 2 consumed: Iron Bar is not equipment
+	equal(f.Records[7].Inventory.Stacks[IronBar], 1)
+end)
+
+test("the upgraded sword is the eligible Forgemaster recipe: an above-configured modifier reduces its inputs", function()
+	-- Proves the equipment-only efficiency mechanism is wired, standing in for a future batch craft.
+	local f = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = 0.5 } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(f.Service.Craft(7, SwordRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronBar], 1) -- max(1, ceil(3 * 0.5)) == 2 consumed, 1 left
+end)
+
+test("configured Forgemaster values still round to no change on the single sword craft (blocked on batch crafting)", function()
+	for _, eff in { 0.02, 0.10 } do
+		local f = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = eff } end)
+		f.Records[7].Inventory.Stacks[IronBar] = 3
+		assert(f.Service.Craft(7, SwordRecipe))
+		equal(f.Records[7].Inventory.Stacks[IronBar], nil) -- full 3 consumed, no whole-unit saving yet
+	end
+end)
+
+test("equipment material efficiency is clamped so a craft always costs at least one of each input", function()
+	local f = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = 5 } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(f.Service.Craft(7, SwordRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronBar], 2) -- clamped: ceil(3 * 0.1) == 1 consumed, never 0/free
+end)
+
+test("ProcessingSpeedBonus does not change authoritative crafting (no action-time exists to shorten)", function()
+	local base = fixture({ "base_sword" })
+	base.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(base.Service.Craft(7, SwordRecipe))
+	local withSpeed = fixture({ "speed_sword" }, function() return { ProcessingSpeedBonus = 0.9 } end)
+	withSpeed.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(withSpeed.Service.Craft(7, SwordRecipe))
+	-- Identical consumption: ProcessingSpeedBonus is read but truthfully has nothing to act on.
+	equal(withSpeed.Records[7].Inventory.Stacks[IronBar], base.Records[7].Inventory.Stacks[IronBar])
+end)
+
+test("a respec clearing Forgemaster nodes restores full material cost immediately (equipment craft)", function()
+	local efficiency = 0.5
+	local f = fixture({ "s1", "s2" }, function() return { MaterialEfficiencyBonus = efficiency } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 6
+	assert(f.Service.Craft(7, SwordRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronBar], 4) -- reduced: ceil(3 * 0.5) == 2 consumed (6 - 2)
+	efficiency = 0
+	assert(f.Service.Craft(7, SwordRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronBar], 1) -- next craft consumes the full 3 again (4 - 3)
+end)
+
+test("a spoofed non-numeric MaterialEfficiencyBonus grants no discount on an equipment craft", function()
+	local f = fixture({ "generated_sword" }, function() return { MaterialEfficiencyBonus = "0.9", Junk = 1 } end)
+	f.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(f.Service.Craft(7, SwordRecipe))
+	equal(f.Records[7].Inventory.Stacks[IronBar], nil) -- string ignored -> full 3 consumed
+end)
+
+test("a non-function Smithing modifier provider is rejected", function()
+	local ok = pcall(function()
+		return fixture(nil, 5)
+	end)
+	equal(ok, false)
 end)
 
 print(("%d Crafting checks passed"):format(passed))

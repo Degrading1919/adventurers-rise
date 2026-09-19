@@ -44,7 +44,7 @@ local function curve()
 	return { MaximumXP = 6000, Thresholds = thresholds }
 end
 
-local function fixture()
+local function fixture(miningModifiers)
 	local records = {
 		[7] = {
 			Gold = 25,
@@ -100,7 +100,7 @@ local function fixture()
 	local inventory = Inventory.New(playerData, { NewInstanceId = function() return "unused" end })
 	local equipment = Equipment.New(playerData)
 	local skills = Skills.New(playerData, { Curves = { curve_standard = curve() } })
-	local service = Gathering.New(playerData, equipment, inventory, skills, resolveNode)
+	local service = Gathering.New(playerData, equipment, inventory, skills, resolveNode, miningModifiers)
 	return {
 		Records = records,
 		PlayerData = playerData,
@@ -261,6 +261,135 @@ test("ValidateForBegin rejects exactly what GatherForElapsed would reject, via t
 	local distant, distantReason = f.Service.ValidateForBegin(7, IronNode)
 	equal(distant, nil)
 	equal(distantReason, "NodeOutOfRange")
+end)
+
+-- ===== Mining Mastery: GatheringSpeedBonus + PrimaryYieldBonus =====
+-- The fixture injects a provider standing in for Mastery.GetModifiers(userId, Mining). With the basic
+-- pickaxe the base rate is 1 ore/s and 2 Mining XP/s, so a 2s gather yields 2 ore / 4 XP with no nodes.
+
+test("no Mining selections preserve the exact base ore and XP", function()
+	local f = fixture(function() return {} end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 2)
+	equal(result.MiningXP, 4)
+end)
+
+test("GatheringSpeedBonus raises both ore throughput and Mining XP per real second", function()
+	local f = fixture(function() return { GatheringSpeedBonus = 0.5 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 3) -- floor(1 * 1 * 2 * 1.5)
+	equal(result.MiningXP, 6) -- 2 * 1 * 2 * 1.5
+	equal(f.Records[7].Inventory.Stacks[IronOre], 3)
+end)
+
+test("PrimaryYieldBonus enriches ore output only and never inflates Mining XP", function()
+	local f = fixture(function() return { PrimaryYieldBonus = 0.5 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 3) -- floor(1 * 1 * 2 * 1.5)
+	equal(result.MiningXP, 4) -- unchanged: yield does not touch XP
+end)
+
+test("speed and yield stack on ore per Mastery.GetModifiers while only speed affects XP", function()
+	local f = fixture(function() return { GatheringSpeedBonus = 0.5, PrimaryYieldBonus = 0.5 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 4) -- floor(1 * 1 * 2 * 1.5 * 1.5) == floor(4.5)
+	equal(result.MiningXP, 6) -- 2 * 1 * 2 * 1.5
+end)
+
+test("Mining modifiers scale outputs deterministically without touching trusted elapsed time", function()
+	-- Same trusted elapsed -> identical result every time (floor is deterministic, no RNG).
+	local f = fixture(function() return { GatheringSpeedBonus = 0.5 } end)
+	local first = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	local second = assert(fixture(function() return { GatheringSpeedBonus = 0.5 } end).Service.GatherForElapsed(7, IronNode, 2))
+	equal(first.OreAmount, second.OreAmount)
+	equal(first.MiningXP, second.MiningXP)
+	-- The elapsed cap is still enforced regardless of any bonus, so time cannot be inflated.
+	local capped, cappedReason = f.Service.GatherForElapsed(7, IronNode, Gathering.MaximumElapsedSeconds + 1)
+	equal(capped, nil)
+	equal(cappedReason, "InvalidElapsedSeconds")
+end)
+
+test("spoofed or non-numeric Mining modifier values contribute no bonus", function()
+	local f = fixture(function() return { GatheringSpeedBonus = "9", PrimaryYieldBonus = 0.5, Junk = 1 } end)
+	local result = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(result.OreAmount, 3) -- string speed ignored; only the numeric yield applies
+	equal(result.MiningXP, 4) -- speed string ignored, so XP stays at base
+end)
+
+test("a respec clearing Mining nodes restores base ore/XP immediately", function()
+	local bonus = 0.5
+	local f = fixture(function() return { GatheringSpeedBonus = bonus } end)
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 2)).OreAmount, 3)
+	bonus = 0
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 2)).OreAmount, 2)
+end)
+
+test("a non-function Mining modifier provider is rejected", function()
+	local ok = pcall(function()
+		return fixture(5)
+	end)
+	equal(ok, false)
+end)
+
+-- ===== Deterministic fractional ore across settlements, using the REAL configured Mastery values =====
+-- Base rate is 1 ore/s (Iron Ore 1 ore/s x basic pickaxe 1). The real per-node bonus is +0.02 and a
+-- fully completed branch is +0.10. Flooring each ~1s settlement independently used to discard that
+-- fraction entirely; a server-owned carry now makes cumulative ore a pure floor of cumulative
+-- rate*elapsed, so repeated short settlements realize the same total as one equivalent long settlement.
+
+local function repeatedOre(bonus, seconds, chunk)
+	local f = fixture(function()
+		return bonus
+	end)
+	local total = 0
+	local remaining = seconds
+	while remaining > 0 do
+		local this = math.min(chunk, remaining)
+		total += assert(f.Service.GatherForElapsed(7, IronNode, this)).OreAmount
+		remaining -= this
+	end
+	return total
+end
+
+local function oneShotOre(bonus, seconds)
+	return assert(fixture(function()
+		return bonus
+	end).Service.GatherForElapsed(7, IronNode, seconds)).OreAmount
+end
+
+test("real +10% GatheringSpeedBonus: 15x1s realizes the +1 extra ore and matches one 15s settlement", function()
+	-- rate 1.10 over 15s -> floor(16.5) = 16 (base 15). Independent per-settlement flooring gives only 15.
+	equal(repeatedOre({ GatheringSpeedBonus = 0.10 }, 15, 1), 16)
+	equal(oneShotOre({ GatheringSpeedBonus = 0.10 }, 15), 16)
+	equal(oneShotOre({}, 15), 15) -- no-Mastery baseline
+end)
+
+test("real +2% PrimaryYieldBonus: 60x1s realizes the +1 extra ore and matches one 60s settlement", function()
+	-- rate 1.02 over 60s -> floor(61.2) = 61 (base 60). At ~1s chunks the old code produced only 60.
+	equal(repeatedOre({ PrimaryYieldBonus = 0.02 }, 60, 1), 61)
+	equal(oneShotOre({ PrimaryYieldBonus = 0.02 }, 60), 61)
+	equal(oneShotOre({}, 60), 60)
+end)
+
+test("cumulative ore is chunk-size independent for a real +2% bonus (1s vs 5s vs one 60s)", function()
+	equal(repeatedOre({ GatheringSpeedBonus = 0.02 }, 60, 1), 61)
+	equal(repeatedOre({ GatheringSpeedBonus = 0.02 }, 60, 5), 61)
+	equal(repeatedOre({ GatheringSpeedBonus = 0.02 }, 60, 60), 61)
+end)
+
+test("ResetCarry drops the in-progress fraction so a fresh session starts clean", function()
+	local f = fixture(function()
+		return { GatheringSpeedBonus = 0.10 }
+	end)
+	-- Accrue a partial carry (rate 1.10 over 1s -> 1 ore, 0.10 carried).
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 1)).OreAmount, 1)
+	f.Service.ResetCarry(7)
+	-- With the carry cleared, five 1s settlements yield floor(1.10*5)=5, not 6 (no inherited 0.10).
+	local total = 0
+	for _ = 1, 5 do
+		total += assert(f.Service.GatherForElapsed(7, IronNode, 1)).OreAmount
+	end
+	equal(total, 5)
 end)
 
 print(("%d Gathering checks passed"):format(passed))

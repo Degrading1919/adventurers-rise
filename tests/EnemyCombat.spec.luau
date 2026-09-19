@@ -172,6 +172,67 @@ test("no client-supplied field can create provocation or choose the XP amount", 
 	equal(appropriateAwards[1].amount, 2)
 end)
 
+-- ===== Defense Mastery: IncomingDamageReduction =====
+-- The 4th New argument stands in for Mastery.GetModifiers(userId, Defense). An appropriate (delta 0)
+-- player is auto-engaged, so these focus purely on how much damage actually reaches runtime health.
+
+test("no Defense selections apply the enemy's full authoritative damage", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG, function() return {} end)
+	local result = assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 10 }))
+	equal(healthCalls.apply[1].amount, 10)
+	equal(result.Damage, 10)
+end)
+
+test("IncomingDamageReduction lowers the damage applied to runtime health server-side", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG, function() return { IncomingDamageReduction = 0.25 } end)
+	local result = assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 10 }))
+	equal(healthCalls.apply[1].amount, 7.5) -- 10 * (1 - 0.25)
+	equal(result.Damage, 7.5)
+	-- Defense XP still scales with difficulty, not with the reduced damage.
+	equal(result.DefenseXP, 2)
+end)
+
+test("an oversized IncomingDamageReduction is clamped so a hit still applies positive damage", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG, function() return { IncomingDamageReduction = 5 } end)
+	local result = assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 10 }))
+	assert(healthCalls.apply[1].amount > 0 and healthCalls.apply[1].amount < 2, "clamped damage must stay small but strictly positive")
+	assert(result.Damage > 0)
+end)
+
+test("a respec clearing IncomingDamageReduction restores full damage immediately", function()
+	local reduction = 0.25
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG, function() return { IncomingDamageReduction = reduction } end)
+	assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 10 }))
+	equal(healthCalls.apply[1].amount, 7.5)
+	reduction = 0 -- respec removed the Bulwark nodes
+	assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 10 }))
+	equal(healthCalls.apply[2].amount, 10)
+end)
+
+test("a client-supplied IncomingDamageReduction on the enemy state cannot reduce damage", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5, [SkillIds.Defense] = 5 } })
+	-- Provider (the only trusted source) reports no reduction; a spoofed field on the state is ignored.
+	local ec = EnemyCombat.New(health, skills, CONFIG, function() return {} end)
+	assert(ec.ResolveAttack(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5, Damage = 10, IncomingDamageReduction = 0.9 }))
+	equal(healthCalls.apply[1].amount, 10)
+end)
+
+test("a non-function Defense modifier provider is rejected", function()
+	local health = fakeHealth({ alive = true, result = aliveResult })
+	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 5 } })
+	equal(pcall(EnemyCombat.New, health, skills, CONFIG, 5), false)
+	assert(pcall(EnemyCombat.New, health, skills, CONFIG, function() return {} end))
+end)
+
 test("a dead target is never attacked", function()
 	local health, healthCalls = fakeHealth({ alive = false })
 	local skills = fakeSkills({ levels = { [SkillIds.Melee] = 1, [SkillIds.Defense] = 1 } })
