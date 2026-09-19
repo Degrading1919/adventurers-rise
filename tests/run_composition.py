@@ -20,7 +20,7 @@ def main():
     shared_modules = [
         "SkillIds", "PlotSockets", "EquipmentSlots", "ItemDefinitions", "EnemyIds",
         "GatheringNodeIds", "RecipeIds", "AscensionIds", "ProgressionFlagIds", "MasteryIds",
-        "RequestIds",
+        "RequestIds", "EventIds",
     ]
     modules = {name: root / f"src/Shared/{name}.luau" for name in shared_modules}
     modules.update({
@@ -57,6 +57,7 @@ def main():
         "CompositionTrainingSessions": root / "src/Server/Composition/TrainingSessions.luau",
         "CompositionCombatRewards": root / "src/Server/Composition/CombatRewards.luau",
         "CompositionEnemyCombat": root / "src/Server/Composition/EnemyCombat.luau",
+        "CompositionPlayerEvents": root / "src/Server/Composition/PlayerEvents.luau",
         "CompositionReadModel": root / "src/Server/Composition/ReadModel.luau",
         "CompositionWorldAdapters": root / "src/Server/Composition/WorldAdapters.luau",
         "CompositionService": root / "src/Server/Composition/Service.luau",
@@ -95,6 +96,7 @@ local scripts = {{
             TrainingSessions = "CompositionTrainingSessions",
             CombatRewards = "CompositionCombatRewards",
             EnemyCombat = "CompositionEnemyCombat",
+            PlayerEvents = "CompositionPlayerEvents",
             ReadModel = "CompositionReadModel",
             Parent = {{
                 Skills = {{ Curves = "SkillCurves", Service = "SkillsService" }},
@@ -206,6 +208,7 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.TrainingSessions)', 'require("./CompositionTrainingSessions")')
                 source = source.replace('require(script.Parent.CombatRewards)', 'require("./CompositionCombatRewards")')
                 source = source.replace('require(script.Parent.EnemyCombat)', 'require("./CompositionEnemyCombat")')
+                source = source.replace('require(script.Parent.PlayerEvents)', 'require("./CompositionPlayerEvents")')
                 source = source.replace('require(script.Parent.ReadModel)', 'require("./CompositionReadModel")')
             target = temporary / f"{name}.luau"
             target.write_text(source, encoding="utf-8")

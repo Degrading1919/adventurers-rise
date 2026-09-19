@@ -21,12 +21,13 @@ export type Bosses = {
 
 local Service = {}
 
-function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> ())
+function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> (), announceBossReward: (any) -> ())
 	assert(type(combat) == "table" and type(combat.ResolveMeleeAttack) == "function", "CombatRewards requires Combat")
 	assert(type(enemies) == "table" and type(enemies.GetSnapshot) == "function" and type(enemies.ConsumeDeath) == "function", "CombatRewards requires Enemies")
 	assert(type(economy) == "table" and type(economy.CreditGold) == "function", "CombatRewards requires Economy")
 	assert(type(bosses) == "table" and type(bosses.ResolveBossDeath) == "function", "CombatRewards requires Bosses")
 	assert(type(warn) == "function", "CombatRewards requires a warn sink")
+	assert(type(announceBossReward) == "function", "CombatRewards requires a boss-reward announcer")
 
 	local coordinator = {}
 
@@ -46,8 +47,18 @@ function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses:
 			local definition = EnemyDefinitions.ById[(snapshot :: any).DefinitionId]
 			if definition and definition.Boss then
 				-- Boss enemies never pass through the normal last-hit Gold path; participation
-				-- rewards remain entirely owned by Bosses.Service.
-				bosses.ResolveBossDeath(targetId)
+				-- rewards remain entirely owned by Bosses.Service. ResolveBossDeath returns a Result
+				-- only on the single hit that consumes the death, so the announce fires exactly once.
+				local bossResult = bosses.ResolveBossDeath(targetId)
+				if bossResult then
+					-- Presentation only, best-effort, and strictly AFTER the authoritative reward
+					-- transaction already committed. Isolated in pcall so a delivery/announce failure can
+					-- never change, duplicate, or roll back the reward, nor fail the attack request.
+					local announced = pcall(announceBossReward, bossResult)
+					if not announced then
+						warn(("[CombatRewards] Boss reward announce failed for %s"):format(targetId))
+					end
+				end
 			else
 				local death = enemies.ConsumeDeath(targetId)
 				if death and (death :: any).GoldReward and (death :: any).GoldReward > 0 then

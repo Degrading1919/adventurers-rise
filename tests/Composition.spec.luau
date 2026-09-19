@@ -7,6 +7,7 @@ local GatheringNodeIds = require("GatheringNodeIds")
 local AscensionIds = require("AscensionIds")
 local ProgressionFlagIds = require("ProgressionFlagIds")
 local MasteryIds = require("MasteryIds")
+local EventIds = require("EventIds")
 local SkillCurves = require("SkillCurves")
 local EconomyService = require("EconomyService")
 local PlayerDataSchema = require("PlayerDataSchema")
@@ -169,19 +170,34 @@ local function buildStack(options: any?)
 		end,
 	}
 
-	local roll01Value = 0
+	local roll01 = { Value = 0 }
 	local instanceSerial = 0
 	local runtimeSerial = 0
+	-- Records every pushed server -> client presentation event by userId, so tests can assert exactly
+	-- what each player receives. Setting playerEventTransportFails models a transport that throws.
+	local playerEventLog: { [number]: { { EventId: string, Payload: any } } } = {}
+	local playerEventTransportFails = { Value = false }
 	local composition = Composition.New(playerData, {
 		Clock = monotonicClock,
 		Now = wallNow,
 		NewInstanceId = function() instanceSerial += 1; return "instance_" .. instanceSerial end,
 		NewRuntimeId = function() runtimeSerial += 1; return "runtime_" .. runtimeSerial end,
 		RollInteger = function(minimum: number, _maximum: number) return minimum end,
-		Roll01 = function() return roll01Value end,
+		Roll01 = function() return roll01.Value end,
 		Warn = function(message) table.insert(warnings, message) end,
 		Spawn = spawn,
 		Wait = coroutine.yield,
+		SendPlayerEvent = function(userId: number, eventId: string, payload: any)
+			if playerEventTransportFails.Value then
+				error("PlayerEvent transport unavailable", 0)
+			end
+			local list = playerEventLog[userId]
+			if not list then
+				list = {}
+				playerEventLog[userId] = list
+			end
+			table.insert(list, { EventId = eventId, Payload = payload })
+		end,
 	}, worldAdapters)
 
 	f.PlayerData = playerData
@@ -195,6 +211,9 @@ local function buildStack(options: any?)
 	f.Advance = advance
 	f.Clock = monotonicClock
 	f.Now = wallNow
+	f.Roll01 = roll01
+	f.PlayerEvents = playerEventLog
+	f.PlayerEventTransportFails = playerEventTransportFails
 
 	-- PlayerData only Releases a session when PlayerRemoving fires the SAME Player object instance
 	-- that PlayerAdded reported; pre-joining here (before Start()) models "already connected when
@@ -620,6 +639,184 @@ test("the Goblin Chieftain never pays through the normal Goblin reward path; par
 	equal(inventory.Stacks.item_iron_bar, 1)
 	local progress = assert(f.Composition.Services.Ascension.EvaluateRequirements(7, AscensionIds.Adept))
 	assert(progress.BossMilestone.Recorded)
+end)
+
+-- ===== Boss personal-reward events (server -> client presentation channel) =====
+
+local function hitBoss(f, userId: number, runtimeId: string, times: number)
+	for _ = 1, times do
+		local r = request(f, userId, RequestIds.CombatMeleeAttack, { TargetId = runtimeId })
+		assert(r.Ok, r.Reason)
+		f.Advance(2) -- clear the weapon cooldown and the per-request throttle before the next hit
+	end
+end
+local function onlyBossEvent(f, userId: number)
+	local list = f.PlayerEvents[userId]
+	assert(list ~= nil, "expected a personal-reward event for user " .. tostring(userId))
+	equal(#list, 1)
+	equal(list[1].EventId, EventIds.BossPersonalReward)
+	return list[1].Payload
+end
+local ALLOWED_REWARD_KEYS = { "BossDefinitionId", "Qualified", "GoldAwarded", "CommonItemDefinitionId", "CommonItemAmount", "RareItemDefinitionId", "RareItemAmount" }
+local function assertOnlyRewardKeys(payload)
+	local allow = {}
+	for _, key in ALLOWED_REWARD_KEYS do
+		allow[key] = true
+	end
+	for key in payload do
+		assert(allow[key], "leaked non-presentation field in reward event: " .. tostring(key))
+	end
+end
+
+test("each eligible Chieftain participant gets their own sanitized reward; independents, ineligible, and nonparticipants are handled correctly", function()
+	local f = fixture()
+	f.Roll01.Value = 0 -- 0 < 0.15 rare chance: eligible participants each roll the rare successfully
+	for _, uid in { 7, 8, 9, 10 } do
+		joinPlayer(f, uid)
+		grantWeapon(f, uid)
+	end
+	local boss = assert(f.Composition.Services.Enemies.Create(EnemyIds.GoblinChieftain))
+	f.CombatDistances[boss.RuntimeId] = 1
+	-- Chieftain MaxHealth 400, weapon 10 dmg; eligibility threshold = 5% * 400 = 20 (two hits).
+	hitBoss(f, 9, boss.RuntimeId, 1) -- 10 dmg: participates but below threshold -> ineligible
+	hitBoss(f, 7, boss.RuntimeId, 20) -- 200 dmg: eligible
+	hitBoss(f, 8, boss.RuntimeId, 19) -- 190 dmg: eligible; 10+200+190 = 400 -> boss dies on this hit
+
+	-- Eligible participant 7: their own event, sanitized, with boss identity, Gold, common + rare.
+	local e7 = onlyBossEvent(f, 7)
+	equal(e7.BossDefinitionId, EnemyIds.GoblinChieftain)
+	equal(e7.Qualified, true)
+	equal(e7.GoldAwarded, boss.GoldReward)
+	equal(e7.CommonItemDefinitionId, "item_iron_bar")
+	equal(e7.CommonItemAmount, 1)
+	equal(e7.RareItemDefinitionId, "item_chieftain_fang")
+	equal(e7.RareItemAmount, 1)
+	assertOnlyRewardKeys(e7) -- no contribution map / RNG / PlayerData / internal fields leaked
+
+	-- Independent participant 8 receives only their own result.
+	local e8 = onlyBossEvent(f, 8)
+	equal(e8.Qualified, true)
+	equal(e8.RareItemDefinitionId, "item_chieftain_fang")
+
+	-- Ineligible participant 9: an honest non-qualifier event, never a fabricated reward.
+	local e9 = onlyBossEvent(f, 9)
+	equal(e9.Qualified, false)
+	equal(e9.GoldAwarded, 0)
+	equal(e9.CommonItemDefinitionId, nil)
+	equal(e9.RareItemDefinitionId, nil)
+
+	-- Nonparticipant 10 never dealt damage -> no event at all.
+	equal(f.PlayerEvents[10], nil)
+end)
+
+test("rare-drop absence is represented correctly in the personal-reward event", function()
+	local f = fixture()
+	f.Roll01.Value = 0.99 -- above the 0.15 rare chance -> no rare
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	local boss = assert(f.Composition.Services.Enemies.Create(EnemyIds.GoblinChieftain))
+	f.CombatDistances[boss.RuntimeId] = 1
+	hitBoss(f, 7, boss.RuntimeId, 40) -- solo kill, eligible
+	local e = onlyBossEvent(f, 7)
+	equal(e.Qualified, true)
+	equal(e.CommonItemDefinitionId, "item_iron_bar")
+	equal(e.CommonItemAmount, 1)
+	equal(e.RareItemDefinitionId, nil)
+	equal(e.RareItemAmount, nil)
+end)
+
+test("a normal Goblin kill emits no boss personal-reward event", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[enemy.RuntimeId] = 1
+	hitBoss(f, 7, enemy.RuntimeId, 3) -- Goblin MaxHealth 30 -> three hits kill it
+	equal(f.PlayerEvents[7], nil)
+end)
+
+test("no client request can manufacture or claim a boss personal-reward event", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[enemy.RuntimeId] = 1
+	-- A spoofed payload pretending to carry a boss reward is ignored; only a real boss death emits.
+	local spoofed = request(f, 7, RequestIds.CombatMeleeAttack, {
+		TargetId = enemy.RuntimeId, BossDefinitionId = EnemyIds.GoblinChieftain,
+		GoldAwarded = 999999, Qualified = true, RareItemDefinitionId = "item_chieftain_fang",
+	})
+	assert(spoofed.Ok, spoofed.Reason)
+	equal(f.PlayerEvents[7], nil)
+	-- No request id's handler emits on this channel: firing every one with junk never produces an event.
+	for _, id in RequestIds do
+		if type(id) == "string" then
+			request(f, 7, id, {
+				TargetId = "nope", SkillId = "nope", NodeId = "nope", StationId = "nope", RecipeId = "nope",
+				RankId = "nope", CatalogId = "nope", DefinitionId = "nope", Amount = 1, InstanceId = "nope",
+				BossDefinitionId = EnemyIds.GoblinChieftain, Qualified = true, GoldAwarded = 1,
+			})
+			f.Advance(1)
+		end
+	end
+	equal(f.PlayerEvents[7], nil)
+end)
+
+test("a personal-reward event delivery failure never changes or duplicates the authoritative boss reward", function()
+	local f = fixture()
+	f.Roll01.Value = 0 -- rare granted
+	f.PlayerEventTransportFails.Value = true -- the transport throws on every send
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	local boss = assert(f.Composition.Services.Enemies.Create(EnemyIds.GoblinChieftain))
+	f.CombatDistances[boss.RuntimeId] = 1
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+	hitBoss(f, 7, boss.RuntimeId, 40) -- solo kill; the killing hit's announce fails delivery
+	-- The reward transaction still committed exactly once despite the failed delivery.
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + boss.GoldReward)
+	local inv = assert(f.Composition.Services.Inventory.GetSnapshot(7))
+	equal(inv.Stacks.item_iron_bar, 1)
+	equal(inv.Stacks.item_chieftain_fang, 1)
+	equal(f.PlayerEvents[7], nil) -- nothing delivered, and nothing duplicated
+	-- The dead boss is ineligible for re-resolution, so there is no second reward.
+	f.Advance(2)
+	local retry = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = boss.RuntimeId })
+	equal(retry.Ok, false)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + boss.GoldReward)
+end)
+
+test("PlayerEvents sanitizes to presentation-only fields, rejects unknown events, blocks fabricated non-qualifier rewards, and isolates delivery failures", function()
+	local PlayerEvents = require("CompositionPlayerEvents")
+	local sent = {}
+	local pe = PlayerEvents.New({ Send = function(userId, eventId, payload) table.insert(sent, { UserId = userId, EventId = eventId, Payload = payload }) end })
+	-- A well-formed reward is sanitized: internal/extra fields are dropped, only presentation kept.
+	local ok = pe.Emit(7, EventIds.BossPersonalReward, {
+		BossDefinitionId = EnemyIds.GoblinChieftain, Qualified = true, GoldAwarded = 50,
+		CommonItemDefinitionId = "item_iron_bar", CommonItemAmount = 1,
+		RareItemDefinitionId = "item_chieftain_fang", RareItemAmount = 1,
+		Contribution = 400, FailureReason = "secret", MilestoneRecorded = true, Extra = {},
+	})
+	equal(ok, true)
+	equal(#sent, 1)
+	equal(sent[1].UserId, 7)
+	local p = sent[1].Payload
+	equal(p.Contribution, nil)
+	equal(p.FailureReason, nil)
+	equal(p.MilestoneRecorded, nil)
+	equal(p.Extra, nil)
+	equal(p.RareItemAmount, 1)
+	-- Unknown event id rejected; nothing sent.
+	equal(select(1, pe.Emit(7, "not_a_real_event", { X = 1 })), false)
+	equal(#sent, 1)
+	-- A non-qualifier carrying reward data is rejected at the boundary.
+	equal(select(1, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = false, GoldAwarded = 100 })), false)
+	-- Invalid userId rejected.
+	equal(select(1, pe.Emit(0, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, GoldAwarded = 0 })), false)
+	-- A throwing transport is contained: Emit reports DeliveryFailed and never propagates.
+	local throwing = PlayerEvents.New({ Send = function() error("down", 0) end })
+	local okThrow, reason = throwing.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, GoldAwarded = 0 })
+	equal(okThrow, false)
+	equal(reason, "DeliveryFailed")
 end)
 
 -- ===== Gathering timing =====

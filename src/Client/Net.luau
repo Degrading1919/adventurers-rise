@@ -13,6 +13,8 @@ function Net.New()
 	assert(remotes, "Missing ReplicatedStorage.Remotes; is the server bootstrap running?")
 	local request = remotes:WaitForChild("Request", 30)
 	assert(request and request:IsA("RemoteFunction"), "Missing Remotes.Request RemoteFunction")
+	local playerEvent = remotes:WaitForChild("PlayerEvent", 30)
+	assert(playerEvent and playerEvent:IsA("RemoteEvent"), "Missing Remotes.PlayerEvent RemoteEvent")
 
 	local net = {}
 
@@ -29,6 +31,17 @@ function Net.New()
 			return false, nil, "MalformedResponse"
 		end
 		return response.Ok == true, response.Result, response.Reason
+	end
+
+	-- Subscribes to the one-way server -> client presentation channel. The server only ever fires this
+	-- to the owning player with an already-sanitized payload; the client treats it as display data and
+	-- never as authority. Reception is best-effort: a malformed push is simply ignored.
+	function net.OnEvent(callback: (string, any) -> ()): RBXScriptConnection
+		return (playerEvent :: RemoteEvent).OnClientEvent:Connect(function(eventId: any, payload: any)
+			if type(eventId) == "string" then
+				callback(eventId, payload)
+			end
+		end)
 	end
 
 	return net

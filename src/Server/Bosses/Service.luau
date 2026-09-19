@@ -34,6 +34,9 @@ export type ParticipantResult = {
 	CommonItemAmount: number?,
 	RareGranted: boolean?,
 	RareItemDefinitionId: string?,
+	-- Presentation companion to RareItemDefinitionId (the already-granted Loot.Rare.Amount); carried so
+	-- a sanitized reward event can state the rare quantity without re-reading server-only loot data.
+	RareItemAmount: number?,
 	MilestoneRecorded: boolean?,
 	FailureReason: string?,
 }
@@ -153,6 +156,7 @@ function Service.New(playerData: PlayerData, enemies: Enemies, economy: Economy,
 				CommonItemAmount = nil,
 				RareGranted = nil,
 				RareItemDefinitionId = nil,
+				RareItemAmount = nil,
 				MilestoneRecorded = nil,
 				FailureReason = nil,
 			}
@@ -192,6 +196,7 @@ function Service.New(playerData: PlayerData, enemies: Enemies, economy: Economy,
 					participant.CommonItemAmount = bossDefinition.Loot.Common.Amount
 					participant.RareGranted = rareGranted
 					participant.RareItemDefinitionId = if rareGranted then bossDefinition.Loot.Rare.ItemDefinitionId else nil
+					participant.RareItemAmount = if rareGranted then bossDefinition.Loot.Rare.Amount else nil
 					participant.MilestoneRecorded = true
 				else
 					participant.FailureReason = mutationReason or updateReason or "PlayerDataUpdateFailed"

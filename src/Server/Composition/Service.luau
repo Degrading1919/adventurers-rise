@@ -26,8 +26,10 @@ local GatheringSessions = require(script.Parent.GatheringSessions)
 local TrainingSessions = require(script.Parent.TrainingSessions)
 local CombatRewards = require(script.Parent.CombatRewards)
 local EnemyCombat = require(script.Parent.EnemyCombat)
+local PlayerEvents = require(script.Parent.PlayerEvents)
 local ReadModel = require(script.Parent.ReadModel)
 local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
+local EventIds = require(game:GetService("ReplicatedStorage").Shared.EventIds)
 
 export type PlayerData = {
 	read GetSnapshot: (number) -> any?,
@@ -53,6 +55,10 @@ export type Runtime = {
 	-- below). Same shape as PlayerData.Runtime's Spawn/Wait.
 	read Spawn: ((...any) -> (), ...any) -> (),
 	read Wait: (number) -> (),
+	-- One-way server -> client presentation transport for pushed player-specific outcome events
+	-- (Bootstrap fires a RemoteEvent to the owning player). Only PlayerEvents ever calls it, and only
+	-- with an already-sanitized payload; it never carries authority.
+	read SendPlayerEvent: (number, string, any) -> (),
 }
 export type WorldAdapters = {
 	read CombatDistanceProvider: (number, any) -> (number?, string?),
@@ -125,8 +131,9 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			and type(runtime.Clock) == "function"
 			and type(runtime.Now) == "function"
 			and type(runtime.Spawn) == "function"
-			and type(runtime.Wait) == "function",
-		"Composition requires a runtime with separate monotonic Clock and wall-clock Now, plus Spawn/Wait"
+			and type(runtime.Wait) == "function"
+			and type(runtime.SendPlayerEvent) == "function",
+		"Composition requires a runtime with separate monotonic Clock and wall-clock Now, plus Spawn/Wait and a player-event transport"
 	)
 	assert(
 		type(worldAdapters) == "table"
@@ -223,9 +230,37 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		ProgressionSkillId = SkillIds.Melee,
 	}, defenseModifiers)
 
+	-- One reusable, typed server -> client presentation-event seam. Boss loot / Gold / progression are
+	-- resolved and committed entirely by Bosses/CombatRewards above; this only surfaces the outcome.
+	local playerEvents = PlayerEvents.New({ Send = runtime.SendPlayerEvent })
+	-- Fans a resolved boss death out to one sanitized personal-reward event per PARTICIPANT (each to
+	-- their own userId). A participant who did not actually receive the reward -- ineligible, or an
+	-- eligible grant that failed -- is reported as Qualified = false with no reward data, never a
+	-- fabricated one; non-participants (absent from the Result) receive nothing. PlayerEvents sanitizes
+	-- and validates before anything is sent, so no internal field here can leak to the client.
+	local function announceBossReward(result: any)
+		if type(result) ~= "table" or type(result.Participants) ~= "table" then
+			return
+		end
+		local bossDefinitionId = result.DefinitionId
+		for _, participant in result.Participants do
+			local granted = participant.RewardGranted == true
+			local rareGranted = granted and participant.RareGranted == true
+			playerEvents.Emit(participant.UserId, EventIds.BossPersonalReward, {
+				BossDefinitionId = bossDefinitionId,
+				Qualified = granted,
+				GoldAwarded = if granted then (participant.CommonGoldAmount or 0) else 0,
+				CommonItemDefinitionId = if granted then participant.CommonItemDefinitionId else nil,
+				CommonItemAmount = if granted then participant.CommonItemAmount else nil,
+				RareItemDefinitionId = if rareGranted then participant.RareItemDefinitionId else nil,
+				RareItemAmount = if rareGranted then participant.RareItemAmount else nil,
+			})
+		end
+	end
+
 	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
 	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock, nearStation)
-	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn)
+	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn, announceBossReward)
 
 	local gameplayReady: { [number]: boolean } = {}
 	local offlineReturnSummaries: { [number]: any } = {}

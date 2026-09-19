@@ -129,6 +129,43 @@ function Interface.New(player: Player)
 		status.Text = text
 	end
 
+	-- ===== Toast (temporary, center): provisional presentation for pushed reward outcomes =====
+	local toast = make("TextLabel", {
+		Size = UDim2.new(0, 340, 0, 96), Position = UDim2.new(0.5, 0, 0.34, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.08, Visible = false,
+		Font = Enum.Font.GothamMedium, TextSize = 16, TextColor3 = COLORS.Text, TextWrapped = true,
+		Text = "",
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 10) }, toast)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 2, Transparency = 0.2 }, toast)
+	make("UIPadding", {
+		PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
+	}, toast)
+	local toastToken = 0
+	local function showToast(text: string, accent: Color3)
+		toast.Text = text
+		toast.TextColor3 = COLORS.Text
+		local stroke = toast:FindFirstChildOfClass("UIStroke")
+		if stroke then
+			stroke.Color = accent
+		end
+		toast.Visible = true
+		toastToken += 1
+		local myToken = toastToken
+		task.delay(6, function()
+			if toastToken == myToken then
+				toast.Visible = false
+			end
+		end)
+	end
+
+	-- Presentation-only boss labels; stable IDs stay authoritative.
+	local BOSS_LABELS: { [string]: string } = { enemy_goblin_chieftain = "Goblin Chieftain" }
+	local function bossLabel(id: any): string
+		return (type(id) == "string" and BOSS_LABELS[id]) or "the boss"
+	end
+
 	-- ===== Action bar (bottom): scrollable so it fits narrow screens =====
 	local bar = make("ScrollingFrame", {
 		Size = UDim2.new(1, -20, 0, 60), Position = UDim2.new(0.5, 0, 1, -10),
@@ -384,6 +421,33 @@ function Interface.New(player: Player)
 	local iface: any = {}
 	iface.Handlers = handlers
 	iface.SetStatus = setStatus
+
+	-- Renders a sanitized boss personal-reward push (see Composition/PlayerEvents) as a temporary toast.
+	-- Pure presentation of server-authoritative data; the client never grants anything from this.
+	function iface.ShowBossReward(payload: any)
+		if type(payload) ~= "table" then
+			return
+		end
+		local boss = bossLabel(payload.BossDefinitionId)
+		if payload.Qualified ~= true then
+			showToast(("You joined the fight against %s, but didn't earn a personal reward this time."):format(boss), COLORS.Dim)
+			return
+		end
+		local lines = { ("Defeated %s!"):format(boss) }
+		local gold = if type(payload.GoldAwarded) == "number" then math.floor(payload.GoldAwarded + 0.5) else 0
+		if gold > 0 then
+			table.insert(lines, ("+%d Gold"):format(gold))
+		end
+		if type(payload.CommonItemDefinitionId) == "string" then
+			local amount = if type(payload.CommonItemAmount) == "number" then payload.CommonItemAmount else 1
+			table.insert(lines, ("%dx %s"):format(amount, itemLabel(payload.CommonItemDefinitionId)))
+		end
+		if type(payload.RareItemDefinitionId) == "string" then
+			local amount = if type(payload.RareItemAmount) == "number" then payload.RareItemAmount else 1
+			table.insert(lines, ("RARE! %dx %s"):format(amount, itemLabel(payload.RareItemDefinitionId)))
+		end
+		showToast(table.concat(lines, "\n"), COLORS.Good)
+	end
 
 	function iface.Update(state: any)
 		lastState = state
