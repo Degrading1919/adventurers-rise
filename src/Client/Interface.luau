@@ -70,9 +70,14 @@ function Interface.New(player: Player)
 		TrainToggle = function() end,
 		Upgrade = function() end,
 		ForgeCraft = function(_recipeId: string) end,
-		Equip = function(_instanceId: string) end,
+		Equip = function(_slotId: string, _instanceId: string) end,
 		Ascend = function() end,
 		SetOfflineFocus = function(_skillId: string) end,
+		SelectMastery = function(_skillId: string, _nodeId: string) end,
+		RespecMastery = function(_skillId: string) end,
+		ShopBuy = function(_catalogId: string, _definitionId: string, _amount: number) end,
+		ShopSell = function(_catalogId: string, _definitionId: string, _amount: number) end,
+		ShopBuyDiscrete = function(_catalogId: string, _definitionId: string) end,
 	}
 
 	local screen = make("ScreenGui", {
@@ -195,13 +200,15 @@ function Interface.New(player: Player)
 	local forgeBtn = button("Forge", 4)
 	local upgradeBtn = button("Upgrade", 5)
 	local gearBtn = button("Gear", 6)
-	local ascendBtn = button("Ascend", 7)
-	local offlineBtn = button("Offline", 8)
+	local shopBtn = button("Shop", 7)
+	local skillsBtn = button("Skills", 8)
+	local ascendBtn = button("Ascend", 9)
+	local offlineBtn = button("Offline", 10)
 
 	-- ===== Panels =====
-	local function panel(titleText: string): (Frame, Frame)
+	local function panel(titleText: string, height: number?): (Frame, Frame)
 		local root = make("Frame", {
-			Size = UDim2.new(0, 360, 0, 300), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.new(0, 360, 0, height or 300), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
 			BackgroundColor3 = COLORS.Panel, Visible = false,
 		}, screen)
 		make("UICorner", { CornerRadius = UDim.new(0, 10) }, root)
@@ -223,15 +230,19 @@ function Interface.New(player: Player)
 	end
 
 	local forgePanel, forgeContent = panel("Forge — Smithing")
-	local gearPanel, gearContent = panel("Gear — Equipment")
+	local gearPanel, gearContent = panel("Gear — Inventory")
 	local ascendPanel, ascendContent = panel("Ascension — Adept")
 	local offlinePanel, offlineContent = panel("Offline Training")
+	local shopPanel, shopContent = panel("Shop — Hub", 340)
+	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
 
 	local function hideAllPanels()
 		forgePanel.Visible = false
 		gearPanel.Visible = false
 		ascendPanel.Visible = false
 		offlinePanel.Visible = false
+		shopPanel.Visible = false
+		masteryPanel.Visible = false
 	end
 
 	-- Latest state cache so re-rendering a panel uses current data.
@@ -262,46 +273,91 @@ function Interface.New(player: Player)
 	}, gearContent)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, gearList)
 
+	local SLOT_LABELS: { [string]: string } = { [EquipmentSlots.Weapon] = "Weapon", [EquipmentSlots.Tool] = "Tool" }
+	local function gearHeader(text: string, order2: number)
+		make("TextLabel", {
+			Size = UDim2.new(1, -6, 0, 18), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
+			TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, Text = text, LayoutOrder = order2,
+		}, gearList)
+	end
+	local function gearNote(text: string, order2: number)
+		make("TextLabel", {
+			Size = UDim2.new(1, -6, 0, 26), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 13,
+			TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, Text = text, LayoutOrder = order2,
+		}, gearList)
+	end
+
+	-- Shows the current inventory as two readable sections: equippable Equipment (weapons + tools, with
+	-- Equip/Equipped state per slot) and stackable Resources with counts. All state is authoritative;
+	-- equipping only sends intent.
 	local function renderGear()
 		for _, child in gearList:GetChildren() do
-			if child:IsA("Frame") then child:Destroy() end
+			if child:IsA("Frame") or child:IsA("TextLabel") then child:Destroy() end
 		end
 		if not lastState then return end
-		local equippedWeapon = lastState.Equipment and lastState.Equipment[EquipmentSlots.Weapon]
-		local equippedInstance = equippedWeapon and equippedWeapon.InstanceId
+		local equipment = lastState.Equipment or {}
 		local items = (lastState.Inventory and lastState.Inventory.Items) or {}
+		local stacks = (lastState.Inventory and lastState.Inventory.Stacks) or {}
 		local order2 = 0
-		local any = false
+
+		gearHeader("EQUIPMENT", order2); order2 += 1
+		local equippable: { { InstanceId: string, DefinitionId: string, SlotId: string } } = {}
 		for instanceId, item in items do
 			local def = ItemDefinitions.ById[item.DefinitionId]
-			local isWeapon = def and def.Equipment and def.Equipment.SlotId == EquipmentSlots.Weapon
-			if isWeapon then
-				any = true
-				local isEquipped = instanceId == equippedInstance
-				local row = make("Frame", { Size = UDim2.new(1, -6, 0, 36), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, gearList)
-				make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
-				make("TextLabel", {
-					Size = UDim2.new(1, -96, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
-					Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-					Text = itemLabel(item.DefinitionId),
-				}, row)
-				local act = make("TextButton", {
-					Size = UDim2.new(0, 84, 0, 28), Position = UDim2.new(1, -88, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
-					BackgroundColor3 = if isEquipped then COLORS.ButtonOn else COLORS.Accent, Font = Enum.Font.GothamMedium,
-					TextSize = 13, TextColor3 = COLORS.Text, Text = if isEquipped then "Equipped" else "Equip",
-				}, row)
-				make("UICorner", { CornerRadius = UDim.new(0, 6) }, act)
-				if not isEquipped then
-					act.Activated:Connect(function() handlers.Equip(instanceId) end)
-				end
-				order2 += 1
+			if def and def.Equipment then
+				table.insert(equippable, { InstanceId = instanceId, DefinitionId = item.DefinitionId, SlotId = def.Equipment.SlotId })
 			end
 		end
-		if not any then
+		table.sort(equippable, function(a, b): boolean
+			return a.DefinitionId < b.DefinitionId
+		end)
+		if #equippable == 0 then
+			gearNote("No gear yet.", order2); order2 += 1
+		end
+		for _, entry in equippable do
+			local slotEquipped = equipment[entry.SlotId]
+			local isEquipped = type(slotEquipped) == "table" and slotEquipped.InstanceId == entry.InstanceId
+			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 36), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, gearList)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
 			make("TextLabel", {
-				Size = UDim2.new(1, -6, 0, 30), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 14,
-				TextColor3 = COLORS.Dim, Text = "No weapons in inventory yet.", LayoutOrder = 0,
-			}, gearList)
+				Size = UDim2.new(1, -96, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = ("%s  (%s)"):format(itemLabel(entry.DefinitionId), SLOT_LABELS[entry.SlotId] or entry.SlotId),
+			}, row)
+			local act = make("TextButton", {
+				Size = UDim2.new(0, 84, 0, 28), Position = UDim2.new(1, -88, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+				BackgroundColor3 = if isEquipped then COLORS.ButtonOn else COLORS.Accent, Font = Enum.Font.GothamMedium,
+				TextSize = 13, TextColor3 = COLORS.Text, Text = if isEquipped then "Equipped" else "Equip",
+			}, row)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, act)
+			if not isEquipped then
+				act.Activated:Connect(function() handlers.Equip(entry.SlotId, entry.InstanceId) end)
+			end
+			order2 += 1
+		end
+
+		gearHeader("RESOURCES", order2); order2 += 1
+		local resources: { { DefinitionId: string, Count: number } } = {}
+		for defId, count in stacks do
+			if type(count) == "number" and count > 0 then
+				table.insert(resources, { DefinitionId = defId, Count = count })
+			end
+		end
+		table.sort(resources, function(a, b): boolean
+			return a.DefinitionId < b.DefinitionId
+		end)
+		if #resources == 0 then
+			gearNote("No resources yet.", order2); order2 += 1
+		end
+		for _, resource in resources do
+			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 30), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, gearList)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			make("TextLabel", {
+				Size = UDim2.new(1, -16, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = ("%s   x%d"):format(itemLabel(resource.DefinitionId), resource.Count),
+			}, row)
+			order2 += 1
 		end
 	end
 
@@ -417,6 +473,194 @@ function Interface.New(player: Player)
 		end
 	end
 
+	-- ---- Shop panel ----
+	-- Buy/sell the hub catalog's items using the server-authoritative Economy requests. Prices come
+	-- straight from the read-model Shop; the client never prices, validates, or mutates anything.
+	local shopGoldLabel = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+		TextColor3 = Color3.fromRGB(240, 210, 90), Text = "Gold: --",
+	}, shopContent)
+	local shopList = make("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, -26), Position = UDim2.new(0, 0, 0, 26), BackgroundTransparency = 1,
+		ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, shopContent)
+	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, shopList)
+
+	local function renderShop()
+		for _, child in shopList:GetChildren() do
+			if child:IsA("Frame") or child:IsA("TextLabel") then child:Destroy() end
+		end
+		if not lastState then return end
+		shopGoldLabel.Text = "Gold: " .. tostring(lastState.Gold)
+		local shop = lastState.Shop
+		if type(shop) ~= "table" or type(shop.Entries) ~= "table" then
+			return
+		end
+		local stacks = (lastState.Inventory and lastState.Inventory.Stacks) or {}
+		local order2 = 0
+		for _, entry in shop.Entries do
+			local defId = entry.ItemDefinitionId
+			local def = ItemDefinitions.ById[defId]
+			local isStack = def ~= nil and def.Kind == "Stackable"
+			local owned = stacks[defId] or 0
+			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 40), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, shopList)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			local labelText = itemLabel(defId)
+			if isStack then
+				labelText = ("%s  (have %d)"):format(labelText, owned)
+			end
+			make("TextLabel", {
+				Size = UDim2.new(1, -150, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+				TextWrapped = true, Text = labelText,
+			}, row)
+			if type(entry.BuyPrice) == "number" then
+				local buy = make("TextButton", {
+					Size = UDim2.new(0, 66, 0, 28), Position = UDim2.new(1, -146, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+					BackgroundColor3 = COLORS.Accent, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text,
+					Text = ("Buy %d"):format(entry.BuyPrice),
+				}, row)
+				make("UICorner", { CornerRadius = UDim.new(0, 6) }, buy)
+				buy.Activated:Connect(function()
+					if isStack then
+						handlers.ShopBuy(shop.Id, defId, 1)
+					else
+						handlers.ShopBuyDiscrete(shop.Id, defId)
+					end
+				end)
+			end
+			-- Selling is offered for stackable resources (discrete-item sale needs an instance and is not
+			-- part of the core slice loop).
+			if isStack and type(entry.SellPrice) == "number" then
+				local sell = make("TextButton", {
+					Size = UDim2.new(0, 66, 0, 28), Position = UDim2.new(1, -74, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+					BackgroundColor3 = COLORS.Button, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text,
+					Text = ("Sell %d"):format(entry.SellPrice),
+				}, row)
+				make("UICorner", { CornerRadius = UDim.new(0, 6) }, sell)
+				sell.Activated:Connect(function()
+					handlers.ShopSell(shop.Id, defId, 1)
+				end)
+			end
+			order2 += 1
+		end
+	end
+
+	-- ---- Mastery panel ----
+	-- Inspect and spend Mastery from the authoritative read-model State (points, branches, node states,
+	-- respec free/cost). The client only presents that state and forwards select/respec intent.
+	local masterySelectedSkill = SkillIds.Melee
+	local renderMastery: () -> ()
+	local tabRow = make("Frame", { Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1 }, masteryContent)
+	make("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4),
+		VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder,
+	}, tabRow)
+	local masteryTabs: { [string]: TextButton } = {}
+	for index, skillId in SKILL_ORDER do
+		local tab = make("TextButton", {
+			Size = UDim2.new(0.25, -3, 1, 0), BackgroundColor3 = COLORS.Button, AutoButtonColor = true,
+			Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text, Text = SKILL_LABELS[skillId] or skillId, LayoutOrder = index,
+		}, tabRow)
+		make("UICorner", { CornerRadius = UDim.new(0, 6) }, tab)
+		tab.Activated:Connect(function()
+			masterySelectedSkill = skillId
+			renderMastery()
+		end)
+		masteryTabs[skillId] = tab
+	end
+	local masteryPointsLabel = make("TextLabel", {
+		Size = UDim2.new(1, -112, 0, 26), Position = UDim2.new(0, 0, 0, 36), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+	}, masteryContent)
+	local respecBtn = make("TextButton", {
+		Size = UDim2.new(0, 106, 0, 26), Position = UDim2.new(1, -106, 0, 36), BackgroundColor3 = COLORS.Button,
+		Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text, Text = "Respec",
+	}, masteryContent)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, respecBtn)
+	respecBtn.Activated:Connect(function() handlers.RespecMastery(masterySelectedSkill) end)
+	local masteryList = make("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, -70), Position = UDim2.new(0, 0, 0, 70), BackgroundTransparency = 1,
+		ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, masteryContent)
+	make("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, masteryList)
+
+	-- Compact presentation of an authoritative LockedReason; never recomputed here.
+	local function lockedTag(reason: any, requiredLevel: any): string
+		if reason == "InsufficientSkillLevel" then
+			return ("Lv %s"):format(tostring(requiredLevel))
+		elseif reason == "InsufficientMasteryPoints" then
+			return "No pts"
+		end
+		return "Locked"
+	end
+
+	function renderMastery()
+		for skillId, tab in masteryTabs do
+			tab.BackgroundColor3 = if skillId == masterySelectedSkill then COLORS.ButtonOn else COLORS.Button
+		end
+		for _, child in masteryList:GetChildren() do
+			if child:IsA("Frame") or child:IsA("TextLabel") then child:Destroy() end
+		end
+		local m = lastState and lastState.Mastery and lastState.Mastery[masterySelectedSkill]
+		if not m then
+			masteryPointsLabel.Text = ""
+			return
+		end
+		masteryPointsLabel.Text = ("Available %d · Earned %d · Spent %d"):format(m.AvailablePoints, m.EarnedPoints, m.SpentPoints)
+		if m.FreeRespecAvailable == true then
+			respecBtn.Text = "Free Respec"
+			respecBtn.BackgroundColor3 = if (m.SpentPoints or 0) > 0 then COLORS.Accent else COLORS.Button
+		elseif type(m.NextRespecGoldCost) == "number" and m.NextRespecGoldCost > 0 then
+			respecBtn.Text = ("Respec %dg"):format(m.NextRespecGoldCost)
+			respecBtn.BackgroundColor3 = COLORS.Accent
+		else
+			respecBtn.Text = "Respec"
+			respecBtn.BackgroundColor3 = COLORS.Button
+		end
+		local order2 = 0
+		for _, branch in m.Branches do
+			make("TextLabel", {
+				Size = UDim2.new(1, -6, 0, 18), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 13,
+				TextColor3 = COLORS.Accent, TextXAlignment = Enum.TextXAlignment.Left, Text = branch.DisplayName, LayoutOrder = order2,
+			}, masteryList)
+			order2 += 1
+			for _, node in branch.Nodes do
+				local row = make("Frame", { Size = UDim2.new(1, -6, 0, 32), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, masteryList)
+				make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+				make("TextLabel", {
+					Size = UDim2.new(1, -88, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+					Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+					TextWrapped = true, Text = node.DisplayName,
+				}, row)
+				if node.Selected == true then
+					local tag = make("TextLabel", {
+						Size = UDim2.new(0, 78, 0, 24), Position = UDim2.new(1, -82, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+						BackgroundColor3 = COLORS.ButtonOn, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = COLORS.Text, Text = "Owned ✓",
+					}, row)
+					make("UICorner", { CornerRadius = UDim.new(0, 6) }, tag)
+				elseif node.Selectable == true then
+					local sel = make("TextButton", {
+						Size = UDim2.new(0, 78, 0, 24), Position = UDim2.new(1, -82, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+						BackgroundColor3 = COLORS.Accent, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = COLORS.Text, Text = "Select",
+					}, row)
+					make("UICorner", { CornerRadius = UDim.new(0, 6) }, sel)
+					local nodeId = node.Id
+					sel.Activated:Connect(function() handlers.SelectMastery(masterySelectedSkill, nodeId) end)
+				else
+					local tag = make("TextLabel", {
+						Size = UDim2.new(0, 78, 0, 24), Position = UDim2.new(1, -82, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+						BackgroundColor3 = Color3.fromRGB(45, 47, 55), Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = COLORS.Dim,
+						Text = lockedTag(node.LockedReason, node.RequiredLevel),
+					}, row)
+					make("UICorner", { CornerRadius = UDim.new(0, 6) }, tag)
+				end
+				order2 += 1
+			end
+		end
+	end
+
 	-- ===== Public update / context APIs =====
 	local iface: any = {}
 	iface.Handlers = handlers
@@ -477,6 +721,8 @@ function Interface.New(player: Player)
 		if gearPanel.Visible then renderGear() end
 		if ascendPanel.Visible then renderAscend() end
 		if offlinePanel.Visible then renderOffline() end
+		if shopPanel.Visible then renderShop() end
+		if masteryPanel.Visible then renderMastery() end
 	end
 
 	-- Opens the Offline panel showing the current focus and the latest While You Were Away summary.
@@ -550,6 +796,8 @@ function Interface.New(player: Player)
 	upgradeBtn.Activated:Connect(function() handlers.Upgrade() end)
 	forgeBtn.Activated:Connect(function() hideAllPanels(); forgePanel.Visible = true end)
 	gearBtn.Activated:Connect(function() hideAllPanels(); renderGear(); gearPanel.Visible = true end)
+	shopBtn.Activated:Connect(function() hideAllPanels(); renderShop(); shopPanel.Visible = true end)
+	skillsBtn.Activated:Connect(function() hideAllPanels(); renderMastery(); masteryPanel.Visible = true end)
 	ascendBtn.Activated:Connect(function() hideAllPanels(); renderAscend(); ascendPanel.Visible = true end)
 	offlineBtn.Activated:Connect(function() hideAllPanels(); renderOffline(); offlinePanel.Visible = true end)
 

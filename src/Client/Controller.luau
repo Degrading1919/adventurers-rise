@@ -13,7 +13,6 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local RequestIds = require(Shared:WaitForChild("RequestIds"))
 local GatheringNodeIds = require(Shared:WaitForChild("GatheringNodeIds"))
 local AscensionIds = require(Shared:WaitForChild("AscensionIds"))
-local EquipmentSlots = require(Shared:WaitForChild("EquipmentSlots"))
 local EventIds = require(Shared:WaitForChild("EventIds"))
 
 local INTERACT_RADIUS = 14
@@ -248,10 +247,42 @@ function Controller.New(player: Player, net: any, iface: any)
 		refresh()
 	end
 
-	-- ===== Equip =====
-	iface.Handlers.Equip = function(instanceId: string)
-		local ok, _, reason = net.Request(RequestIds.EquipmentEquip, { SlotId = EquipmentSlots.Weapon, InstanceId = instanceId })
+	-- ===== Equip (any slot) =====
+	iface.Handlers.Equip = function(slotId: string, instanceId: string)
+		local ok, _, reason = net.Request(RequestIds.EquipmentEquip, { SlotId = slotId, InstanceId = instanceId })
 		iface.SetStatus(if ok then "Equipped." else ("Equip: " .. reasonText(reason)))
+		refresh()
+	end
+
+	-- ===== Mastery (select / respec) =====
+	-- The read model carries the authoritative Mastery state (points, node states, respec free/cost);
+	-- the client only forwards select/respec intent through the existing requests and re-reads state.
+	iface.Handlers.SelectMastery = function(skillId: string, nodeId: string)
+		local ok, _, reason = net.Request(RequestIds.MasterySelectNode, { SkillId = skillId, NodeId = nodeId })
+		iface.SetStatus(if ok then "Mastery node selected." else ("Mastery: " .. reasonText(reason)))
+		refresh()
+	end
+	iface.Handlers.RespecMastery = function(skillId: string)
+		local ok, _, reason = net.Request(RequestIds.MasteryRespec, { SkillId = skillId })
+		iface.SetStatus(if ok then "Mastery respec applied." else ("Respec: " .. reasonText(reason)))
+		refresh()
+	end
+
+	-- ===== Shop (buy / sell) =====
+	-- The server owns prices, Gold, and validation; the client forwards the chosen catalog action only.
+	iface.Handlers.ShopBuy = function(catalogId: string, definitionId: string, amount: number)
+		local ok, _, reason = net.Request(RequestIds.EconomyPurchaseStack, { CatalogId = catalogId, DefinitionId = definitionId, Amount = amount })
+		iface.SetStatus(if ok then "Purchased." else ("Buy: " .. reasonText(reason)))
+		refresh()
+	end
+	iface.Handlers.ShopSell = function(catalogId: string, definitionId: string, amount: number)
+		local ok, _, reason = net.Request(RequestIds.EconomySellStack, { CatalogId = catalogId, DefinitionId = definitionId, Amount = amount })
+		iface.SetStatus(if ok then "Sold." else ("Sell: " .. reasonText(reason)))
+		refresh()
+	end
+	iface.Handlers.ShopBuyDiscrete = function(catalogId: string, definitionId: string)
+		local ok, _, reason = net.Request(RequestIds.EconomyPurchaseDiscrete, { CatalogId = catalogId, DefinitionId = definitionId })
+		iface.SetStatus(if ok then "Purchased." else ("Buy: " .. reasonText(reason)))
 		refresh()
 	end
 
