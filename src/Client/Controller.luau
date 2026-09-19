@@ -261,6 +261,16 @@ function Controller.New(player: Player, net: any, iface: any)
 		refresh()
 	end
 
+	-- ===== Offline training focus =====
+	-- The player explicitly chooses which supported skill (Melee/Defense) trains while offline. The
+	-- server owns validation, rates, the cap, and the claim; the client only forwards the choice and
+	-- re-reads authoritative state (which carries the selected focus back for display).
+	iface.Handlers.SetOfflineFocus = function(skillId: string)
+		local ok, _, reason = net.Request(RequestIds.OfflineTrainingSetFocus, { SkillId = skillId })
+		iface.SetStatus(if ok then "Offline focus updated." else ("Offline focus: " .. reasonText(reason)))
+		refresh()
+	end
+
 	-- ===== Startup: wait for a ready session, then poll state =====
 	function controller.Start()
 		task.spawn(function()
@@ -269,7 +279,9 @@ function Controller.New(player: Player, net: any, iface: any)
 				if state then
 					local ret = state.OfflineReturn
 					if ret and ret.Rewarded and ret.XPAwarded and ret.XPAwarded > 0 then
-						iface.SetStatus(("Offline training added %s XP while away."):format(tostring(ret.XPAwarded)))
+						iface.SetStatus(("Offline training added %d XP while away."):format(math.floor(ret.XPAwarded + 0.5)))
+						-- Surface the compact While You Were Away summary on rejoin.
+						iface.OpenOfflineReturn()
 					end
 					break
 				end

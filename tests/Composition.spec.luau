@@ -359,6 +359,28 @@ test("gameplay is locked until the session becomes ready, and the offline claim 
 	equal(state.OfflineReturn.Reason, "NoFocusSelected")
 end)
 
+test("offline focus selection is player-driven and reflected in the read model (Melee/Defense, switchable, unsupported rejected)", function()
+	-- The client's focus display and switch read/write exactly this contract: OfflineFocusSkillId in
+	-- the read model, set via the OfflineTrainingSetFocus request. No focus is ever inferred.
+	local f = fixture()
+	joinPlayer(f, 7)
+	-- Fresh player: nothing is chosen for them, so the read model reports no focus.
+	equal(assert(request(f, 7, RequestIds.StateGet, nil).Result).OfflineFocusSkillId, nil)
+	-- Explicitly selecting Melee is honored.
+	assert(request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Melee }).Ok)
+	f.Advance(1) -- space out the repeated StateGet past the per-request throttle
+	equal(assert(request(f, 7, RequestIds.StateGet, nil).Result).OfflineFocusSkillId, SkillIds.Melee)
+	-- Switching to Defense updates it.
+	assert(request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Defense }).Ok)
+	f.Advance(1)
+	equal(assert(request(f, 7, RequestIds.StateGet, nil).Result).OfflineFocusSkillId, SkillIds.Defense)
+	-- An unsupported skill is rejected and never becomes the focus.
+	local rejected = request(f, 7, RequestIds.OfflineTrainingSetFocus, { SkillId = SkillIds.Mining })
+	equal(rejected.Ok, false)
+	f.Advance(1)
+	equal(assert(request(f, 7, RequestIds.StateGet, nil).Result).OfflineFocusSkillId, SkillIds.Defense)
+end)
+
 test("an offline focus selected before leaving is honored by the automatic claim on the next join", function()
 	local f = fixture()
 	joinPlayer(f, 7)
