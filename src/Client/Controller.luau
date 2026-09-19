@@ -240,10 +240,24 @@ function Controller.New(player: Player, net: any, iface: any)
 		refresh()
 	end
 
-	-- ===== Forge crafting =====
-	iface.Handlers.ForgeCraft = function(recipeId: string)
-		local ok, _, reason = net.Request(RequestIds.CraftingCraft, { RecipeId = recipeId })
-		iface.SetStatus(if ok then "Smithing succeeded." else ("Smith: " .. reasonText(reason)))
+	-- ===== Forge crafting (single / batch / max) =====
+	-- The client forwards the chosen recipe and requested batch shape only. The server validates the
+	-- quantity, computes Craft Max from authoritative state, and owns all consumption/output/XP.
+	iface.Handlers.ForgeCraft = function(recipeId: string, request: { Quantity: number?, Max: boolean? }?)
+		local payload: { RecipeId: string, Quantity: number?, Max: boolean? } = { RecipeId = recipeId }
+		if type(request) == "table" then
+			if request.Max == true then
+				payload.Max = true
+			elseif type(request.Quantity) == "number" then
+				payload.Quantity = request.Quantity
+			end
+		end
+		local ok, result, reason = net.Request(RequestIds.CraftingCraft, payload)
+		if ok and type(result) == "table" and type(result.Quantity) == "number" then
+			iface.SetStatus(("Crafted x%d."):format(result.Quantity))
+		else
+			iface.SetStatus(if ok then "Crafted." else ("Smith: " .. reasonText(reason)))
+		end
 		refresh()
 	end
 

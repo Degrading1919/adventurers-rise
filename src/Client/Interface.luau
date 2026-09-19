@@ -9,7 +9,6 @@ local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local SkillIds = require(Shared:WaitForChild("SkillIds"))
-local RecipeIds = require(Shared:WaitForChild("RecipeIds"))
 local EquipmentSlots = require(Shared:WaitForChild("EquipmentSlots"))
 local ItemDefinitions = require(Shared:WaitForChild("ItemDefinitions"))
 
@@ -69,7 +68,7 @@ function Interface.New(player: Player)
 		MineToggle = function() end,
 		TrainToggle = function() end,
 		Upgrade = function() end,
-		ForgeCraft = function(_recipeId: string) end,
+		ForgeCraft = function(_recipeId: string, _request: { Quantity: number?, Max: boolean? }?) end,
 		Equip = function(_slotId: string, _instanceId: string) end,
 		Ascend = function() end,
 		SetOfflineFocus = function(_skillId: string) end,
@@ -230,7 +229,7 @@ function Interface.New(player: Player)
 		return root, content
 	end
 
-	local forgePanel, forgeContent = panel("Forge — Smithing")
+	local forgePanel, forgeContent = panel("Forge — Smithing", 360)
 	local gearPanel, gearContent = panel("Gear — Inventory")
 	local ascendPanel, ascendContent = panel("Ascension — Adept")
 	local offlinePanel, offlineContent = panel("Offline Training")
@@ -250,22 +249,65 @@ function Interface.New(player: Player)
 	local lastState: any = nil
 
 	-- ---- Forge panel ----
-	make("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, forgeContent)
+	-- Data-driven from the read-model Recipes (authoritative requirements) and current resources; the
+	-- Craft 1/5/Max buttons only send intent. The server determines affordability, consumption, output,
+	-- XP, and the Max quantity -- the client never computes how many crafts are affordable.
 	local forgeInfo = make("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 14,
-		TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-		TextWrapped = true, Text = "", LayoutOrder = 0,
+		Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "",
 	}, forgeContent)
-	local function craftRow(text: string, recipeId: string, order2: number)
+	local forgeList = make("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, -26), Position = UDim2.new(0, 0, 0, 26), BackgroundTransparency = 1,
+		ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, forgeContent)
+	make("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, forgeList)
+
+	local function forgeCraftButton(text: string, offsetFromRight: number, row: Frame, onClick: () -> ())
 		local b = make("TextButton", {
-			Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = COLORS.Button, Font = Enum.Font.GothamMedium,
-			TextSize = 14, TextColor3 = COLORS.Text, Text = text, LayoutOrder = order2,
-		}, forgeContent)
+			Size = UDim2.new(0, 64, 0, 26), Position = UDim2.new(1, offsetFromRight, 1, -4), AnchorPoint = Vector2.new(0, 1),
+			BackgroundColor3 = COLORS.Button, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = COLORS.Text, Text = text,
+		}, row)
 		make("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
-		b.Activated:Connect(function() handlers.ForgeCraft(recipeId) end)
+		b.Activated:Connect(onClick)
 	end
-	craftRow("Smith Iron Bar (2 Iron Ore)", RecipeIds.IronBar, 1)
-	craftRow("Smith Upgraded Sword (3 Iron Bars, Smith 5)", RecipeIds.SwordUpgraded, 2)
+
+	local function renderForge()
+		for _, child in forgeList:GetChildren() do
+			if child:IsA("Frame") or child:IsA("TextLabel") then child:Destroy() end
+		end
+		if not lastState then return end
+		local stacks = (lastState.Inventory and lastState.Inventory.Stacks) or {}
+		local smithLevel = (lastState.Skills and lastState.Skills[SkillIds.Smithing] and lastState.Skills[SkillIds.Smithing].Level) or 0
+		forgeInfo.Text = ("Iron Ore: %d    Iron Bars: %d    Smithing: Lv %d"):format(stacks.item_iron_ore or 0, stacks.item_iron_bar or 0, smithLevel)
+		local recipes = lastState.Recipes
+		if type(recipes) ~= "table" then return end
+		local order2 = 0
+		for _, recipe in recipes do
+			local recipeId = recipe.RecipeId
+			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 74), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, forgeList)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			make("TextLabel", {
+				Size = UDim2.new(1, -12, 0, 18), Position = UDim2.new(0, 8, 0, 5), BackgroundTransparency = 1,
+				Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = ("%s   (Smith Lv %d)"):format(itemLabel(recipe.OutputItemId), recipe.RequiredSmithingLevel),
+			}, row)
+			-- Authoritative input requirements, straight from the read model.
+			local inputParts = {}
+			for _, input in recipe.Inputs do
+				table.insert(inputParts, ("%dx %s"):format(input.Amount, itemLabel(input.ItemDefinitionId)))
+			end
+			make("TextLabel", {
+				Size = UDim2.new(1, -12, 0, 16), Position = UDim2.new(0, 8, 0, 24), BackgroundTransparency = 1,
+				Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = "Needs: " .. table.concat(inputParts, ", "),
+			}, row)
+			forgeCraftButton("Max", -68, row, function() handlers.ForgeCraft(recipeId, { Max = true }) end)
+			forgeCraftButton("Craft 5", -136, row, function() handlers.ForgeCraft(recipeId, { Quantity = 5 }) end)
+			forgeCraftButton("Craft 1", -204, row, function() handlers.ForgeCraft(recipeId, { Quantity = 1 }) end)
+			order2 += 1
+		end
+	end
 
 	-- ---- Gear panel ----
 	local gearList = make("ScrollingFrame", {
@@ -751,10 +793,7 @@ function Interface.New(player: Player)
 				end
 			end
 		end
-		local oreCount = (state.Inventory and state.Inventory.Stacks and state.Inventory.Stacks.item_iron_ore) or 0
-		local barCount = (state.Inventory and state.Inventory.Stacks and state.Inventory.Stacks.item_iron_bar) or 0
-		local smithLevel = (state.Skills and state.Skills[SkillIds.Smithing] and state.Skills[SkillIds.Smithing].Level) or 0
-		forgeInfo.Text = ("Iron Ore: %d    Iron Bars: %d    Smithing: Lv %d"):format(oreCount, barCount, smithLevel)
+		if forgePanel.Visible then renderForge() end
 		if gearPanel.Visible then renderGear() end
 		if ascendPanel.Visible then renderAscend() end
 		if offlinePanel.Visible then renderOffline() end
@@ -831,7 +870,7 @@ function Interface.New(player: Player)
 	mineBtn.Activated:Connect(function() handlers.MineToggle() end)
 	trainBtn.Activated:Connect(function() handlers.TrainToggle() end)
 	upgradeBtn.Activated:Connect(function() handlers.Upgrade() end)
-	forgeBtn.Activated:Connect(function() hideAllPanels(); forgePanel.Visible = true end)
+	forgeBtn.Activated:Connect(function() hideAllPanels(); renderForge(); forgePanel.Visible = true end)
 	gearBtn.Activated:Connect(function() hideAllPanels(); renderGear(); gearPanel.Visible = true end)
 	shopBtn.Activated:Connect(function() hideAllPanels(); renderShop(); shopPanel.Visible = true end)
 	skillsBtn.Activated:Connect(function() hideAllPanels(); renderMastery(); masteryPanel.Visible = true end)
