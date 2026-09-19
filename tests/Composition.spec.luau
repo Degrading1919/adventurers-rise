@@ -669,6 +669,48 @@ test("gathering re-validates the node on every periodic settlement; moving out o
 	equal(ended.Reason, "NoActiveGatheringSession")
 end)
 
+test("a real validation failure clears the Gathering session AND discards its fractional ore carry", function()
+	-- Unit-drives the coordinator directly so the carry lifecycle is observable: GatheringIntervalTooShort
+	-- retains the session and its carry (unspent time preserved), while a real validation failure tears
+	-- the session down through the same Clear path that resets the carry.
+	local GatheringSessions = require("CompositionGatheringSessions")
+	local now = 0
+	local resetCalls = {}
+	local nextReason: string? = nil
+	local fakeGathering = {
+		ValidateForBegin = function()
+			return { NodeId = GatheringNodeIds.IronOre }, nil
+		end,
+		GatherForElapsed = function()
+			if nextReason then
+				return nil, nextReason
+			end
+			return { OreAmount = 1 }, nil
+		end,
+		ResetCarry = function(userId: number)
+			table.insert(resetCalls, userId)
+		end,
+	}
+	local coord = GatheringSessions.New(fakeGathering, 60, function()
+		return now
+	end)
+	assert(coord.Begin(7, GatheringNodeIds.IronOre)) -- fresh session resets carry once
+	local afterBegin = #resetCalls
+
+	-- Sub-unit interval: session and carry are retained (unspent time kept for the next tick).
+	now += 0.1
+	nextReason = "GatheringIntervalTooShort"
+	equal(select(2, coord.Settle(7)), "GatheringIntervalTooShort")
+	equal(#resetCalls, afterBegin) -- carry NOT reset
+
+	-- A real validation failure ends the session and discards the carry via Clear.
+	now += 1
+	nextReason = "NodeOutOfRange"
+	equal(select(2, coord.Settle(7)), "NodeOutOfRange")
+	equal(#resetCalls, afterBegin + 1) -- carry reset on failure teardown
+	equal(select(2, coord.Settle(7)), "NoActiveGatheringSession") -- session is gone
+end)
+
 test("long active sessions settle incrementally; a mid-session range loss is never retroactively recovered and total credited time never exceeds real elapsed time", function()
 	local f = fixture()
 	joinPlayer(f, 7)

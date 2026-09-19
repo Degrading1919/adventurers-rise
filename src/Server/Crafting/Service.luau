@@ -102,6 +102,11 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 		if not outputItem then
 			return nil, "InvalidRecipeOutput"
 		end
+		-- Forgemaster is defined as "material efficiency when forging EQUIPMENT" (docs/MASTERY_TREES.md),
+		-- so MaterialEfficiencyBonus applies only to recipes whose output is an equippable item. Detected
+		-- from the output item's own Equipment metadata -- never a hard-coded recipe ID -- so a smelting
+		-- recipe (Iron Ore -> Iron Bar) is excluded while the upgraded sword qualifies.
+		local outputIsEquipment = outputItem.Equipment ~= nil
 
 		local result: Result? = nil
 		local mutationReason: string? = nil
@@ -118,17 +123,20 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 				abort("InsufficientSmithingLevel")
 			end
 
-			-- MaterialEfficiencyBonus reduces how much of each input the craft consumes, via a deliberately
-			-- SAFE rounding: ceil of the reduced amount, floored at 1, so a craft is never free or
-			-- negative-cost and a player never receives more discount than earned. No exaggerated rounding
-			-- is used to force a small bonus to "show" on a tiny recipe: at the configured +2%..+10%
-			-- Forgemaster values, a single 2- or 3-unit recipe rounds to no change (a whole unit is only
-			-- saved once the reduction crosses an integer, e.g. eff >= 1/amount). Meaningful realization of
-			-- the configured percentages is therefore BLOCKED on the already-required batch-crafting work
-			-- (a batch multiplies the effective quantity, letting the same percentage save whole units).
-			-- ProcessingSpeedBonus is intentionally NOT consumed here: Craft is an atomic transaction with
-			-- no authoritative action-time to shorten, and fabricating a delay would not be trustworthy.
-			local materialEfficiency = math.clamp(math.max(0, modifierTotal(resolveSmithingModifiers(data), "MaterialEfficiencyBonus")), 0, MAX_MATERIAL_EFFICIENCY)
+			-- MaterialEfficiencyBonus (equipment crafts only, per above) reduces how much of each input the
+			-- craft consumes, via a deliberately SAFE rounding: ceil of the reduced amount, floored at 1, so
+			-- a craft is never free or negative-cost and a player never receives more discount than earned.
+			-- No exaggerated rounding is used to force a small bonus to "show" on a tiny recipe: at the
+			-- configured +2%..+10% Forgemaster values, a single 2- or 3-unit recipe rounds to no change (a
+			-- whole unit is only saved once the reduction crosses an integer, e.g. eff >= 1/amount).
+			-- Meaningful realization of the configured percentages is therefore BLOCKED on the already-
+			-- required batch-crafting work (a batch multiplies the effective quantity, letting the same
+			-- percentage save whole units). ProcessingSpeedBonus is intentionally NOT consumed here: Craft
+			-- is an atomic transaction with no authoritative action-time to shorten, and fabricating a delay
+			-- would not be trustworthy.
+			local materialEfficiency = if outputIsEquipment
+				then math.clamp(math.max(0, modifierTotal(resolveSmithingModifiers(data), "MaterialEfficiencyBonus")), 0, MAX_MATERIAL_EFFICIENCY)
+				else 0
 			for _, recipeInput in definition.Inputs do
 				local requiredAmount = math.max(1, math.ceil(recipeInput.Amount * (1 - materialEfficiency)))
 				local _, removeReason = inventory.RemoveStackFromData(data, recipeInput.ItemDefinitionId, requiredAmount)

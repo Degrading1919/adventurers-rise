@@ -81,7 +81,11 @@ function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock:
 				if reason == "GatheringIntervalTooShort" then
 					return nil, reason
 				end
-				sessions[userId] = nil
+				-- A real validation failure (out of range, tool unequipped, level lost, ...) ends the
+				-- session. Tear it down through the normal clear path so its fractional ore carry is
+				-- discarded immediately, exactly as on Stop/disconnect -- never left to leak into a later
+				-- session for this user.
+				coordinator.Clear(userId)
 				return nil, reason
 			end
 			lastResult = result
