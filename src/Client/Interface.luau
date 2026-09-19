@@ -429,8 +429,14 @@ function Interface.New(player: Player)
 			return
 		end
 		local boss = bossLabel(payload.BossDefinitionId)
+		-- Three distinct states. Reward details are shown only when the reward was actually granted, so
+		-- no fabricated Gold/items ever appear. Internal failure reasons are never surfaced.
 		if payload.Qualified ~= true then
-			showToast(("You joined the fight against %s, but didn't earn a personal reward this time."):format(boss), COLORS.Dim)
+			showToast(("You joined the fight against %s, but didn't deal enough damage to earn a reward."):format(boss), COLORS.Dim)
+			return
+		end
+		if payload.RewardGranted ~= true then
+			showToast(("You earned a %s reward, but it couldn't be granted right now."):format(boss), COLORS.Bad)
 			return
 		end
 		local lines = { ("Defeated %s!"):format(boss) }

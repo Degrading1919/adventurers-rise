@@ -19,10 +19,14 @@ export type Transport = {
 	-- already-sanitized payload.
 	read Send: (number, string, any) -> (),
 }
--- Sanitized Goblin Chieftain personal reward, the first event on this channel.
+-- Sanitized Goblin Chieftain personal reward, the first event on this channel. Qualified (met the
+-- contribution threshold) and RewardGranted (the atomic reward transaction actually succeeded) are kept
+-- as DISTINCT states: a player can qualify yet have the grant fail, in which case no reward data is
+-- carried. The internal FailureReason is never exposed.
 export type BossPersonalReward = {
 	BossDefinitionId: string,
 	Qualified: boolean,
+	RewardGranted: boolean,
 	GoldAwarded: number,
 	CommonItemDefinitionId: string?,
 	CommonItemAmount: number?,
@@ -49,8 +53,9 @@ local function finitePositiveWhole(value: any): boolean
 end
 
 -- Builds a clean BossPersonalReward from arbitrary input, validating every field and copying ONLY the
--- allowed keys. A non-qualifier may never carry any reward data, so the "you didn't qualify" case can
--- never be turned into a fabricated reward at the boundary.
+-- allowed keys. Enforces the qualification/grant invariants so no impossible or fabricated state can
+-- cross the boundary: a reward can never be granted to a non-qualifier, and reward data (Gold or items)
+-- is carried only when the grant actually succeeded.
 local function sanitizeBossPersonalReward(raw: any): (BossPersonalReward?, string?)
 	if type(raw) ~= "table" then
 		return nil, "MalformedPayload"
@@ -60,6 +65,13 @@ local function sanitizeBossPersonalReward(raw: any): (BossPersonalReward?, strin
 	end
 	if type(raw.Qualified) ~= "boolean" then
 		return nil, "InvalidQualified"
+	end
+	if type(raw.RewardGranted) ~= "boolean" then
+		return nil, "InvalidRewardGranted"
+	end
+	-- A reward can never be granted to someone who did not qualify.
+	if raw.RewardGranted == true and raw.Qualified ~= true then
+		return nil, "GrantedRequiresQualified"
 	end
 	if not finiteNonNegative(raw.GoldAwarded) then
 		return nil, "InvalidGoldAwarded"
@@ -77,12 +89,15 @@ local function sanitizeBossPersonalReward(raw: any): (BossPersonalReward?, strin
 			return nil, "InvalidRareReward"
 		end
 	end
-	if raw.Qualified ~= true and (commonId ~= nil or rareId ~= nil or raw.GoldAwarded ~= 0) then
-		return nil, "NonQualifierCannotCarryReward"
+	-- Reward data (Gold or items) is allowed ONLY when the reward was actually granted. This covers
+	-- both non-qualifiers and qualifiers whose atomic grant failed: neither may carry a reward.
+	if raw.RewardGranted ~= true and (raw.GoldAwarded ~= 0 or commonId ~= nil or rareId ~= nil) then
+		return nil, "UngrantedCannotCarryReward"
 	end
 	return {
 		BossDefinitionId = raw.BossDefinitionId,
 		Qualified = raw.Qualified,
+		RewardGranted = raw.RewardGranted,
 		GoldAwarded = raw.GoldAwarded,
 		CommonItemDefinitionId = commonId,
 		CommonItemAmount = commonAmount,

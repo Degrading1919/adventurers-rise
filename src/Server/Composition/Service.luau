@@ -234,27 +234,36 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- resolved and committed entirely by Bosses/CombatRewards above; this only surfaces the outcome.
 	local playerEvents = PlayerEvents.New({ Send = runtime.SendPlayerEvent })
 	-- Fans a resolved boss death out to one sanitized personal-reward event per PARTICIPANT (each to
-	-- their own userId). A participant who did not actually receive the reward -- ineligible, or an
-	-- eligible grant that failed -- is reported as Qualified = false with no reward data, never a
-	-- fabricated one; non-participants (absent from the Result) receive nothing. PlayerEvents sanitizes
-	-- and validates before anything is sent, so no internal field here can leak to the client.
+	-- their own userId). Qualified and RewardGranted stay distinct: Qualified comes from the
+	-- contribution-threshold Eligible flag, RewardGranted from whether the atomic reward transaction
+	-- succeeded. Reward data is carried only when actually granted, so an ineligible player or an
+	-- eligible player whose grant failed never receives a fabricated reward; non-participants (absent
+	-- from the Result) receive nothing. PlayerEvents sanitizes/validates before anything is sent, so no
+	-- internal field (including FailureReason) can leak to the client.
 	local function announceBossReward(result: any)
 		if type(result) ~= "table" or type(result.Participants) ~= "table" then
 			return
 		end
 		local bossDefinitionId = result.DefinitionId
 		for _, participant in result.Participants do
+			local eligible = participant.Eligible == true
 			local granted = participant.RewardGranted == true
 			local rareGranted = granted and participant.RareGranted == true
-			playerEvents.Emit(participant.UserId, EventIds.BossPersonalReward, {
+			local ok, reason = playerEvents.Emit(participant.UserId, EventIds.BossPersonalReward, {
 				BossDefinitionId = bossDefinitionId,
-				Qualified = granted,
+				Qualified = eligible,
+				RewardGranted = granted,
 				GoldAwarded = if granted then (participant.CommonGoldAmount or 0) else 0,
 				CommonItemDefinitionId = if granted then participant.CommonItemDefinitionId else nil,
 				CommonItemAmount = if granted then participant.CommonItemAmount else nil,
 				RareItemDefinitionId = if rareGranted then participant.RareItemDefinitionId else nil,
 				RareItemAmount = if rareGranted then participant.RareItemAmount else nil,
 			})
+			if not ok then
+				-- Presentation-only: a rejected/failed emit is logged but never affects the already-
+				-- committed authoritative reward transaction.
+				runtime.Warn(("[Composition] Boss reward event emit failed for %d: %s"):format(participant.UserId, tostring(reason)))
+			end
 		end
 	end
 

@@ -657,7 +657,7 @@ local function onlyBossEvent(f, userId: number)
 	equal(list[1].EventId, EventIds.BossPersonalReward)
 	return list[1].Payload
 end
-local ALLOWED_REWARD_KEYS = { "BossDefinitionId", "Qualified", "GoldAwarded", "CommonItemDefinitionId", "CommonItemAmount", "RareItemDefinitionId", "RareItemAmount" }
+local ALLOWED_REWARD_KEYS = { "BossDefinitionId", "Qualified", "RewardGranted", "GoldAwarded", "CommonItemDefinitionId", "CommonItemAmount", "RareItemDefinitionId", "RareItemAmount" }
 local function assertOnlyRewardKeys(payload)
 	local allow = {}
 	for _, key in ALLOWED_REWARD_KEYS do
@@ -682,25 +682,28 @@ test("each eligible Chieftain participant gets their own sanitized reward; indep
 	hitBoss(f, 7, boss.RuntimeId, 20) -- 200 dmg: eligible
 	hitBoss(f, 8, boss.RuntimeId, 19) -- 190 dmg: eligible; 10+200+190 = 400 -> boss dies on this hit
 
-	-- Eligible participant 7: their own event, sanitized, with boss identity, Gold, common + rare.
+	-- Eligible + granted participant 7: their own event, sanitized, with boss identity, Gold, common + rare.
 	local e7 = onlyBossEvent(f, 7)
 	equal(e7.BossDefinitionId, EnemyIds.GoblinChieftain)
 	equal(e7.Qualified, true)
+	equal(e7.RewardGranted, true)
 	equal(e7.GoldAwarded, boss.GoldReward)
 	equal(e7.CommonItemDefinitionId, "item_iron_bar")
 	equal(e7.CommonItemAmount, 1)
 	equal(e7.RareItemDefinitionId, "item_chieftain_fang")
 	equal(e7.RareItemAmount, 1)
-	assertOnlyRewardKeys(e7) -- no contribution map / RNG / PlayerData / internal fields leaked
+	assertOnlyRewardKeys(e7) -- no contribution map / RNG / PlayerData / FailureReason / internal fields leaked
 
 	-- Independent participant 8 receives only their own result.
 	local e8 = onlyBossEvent(f, 8)
 	equal(e8.Qualified, true)
+	equal(e8.RewardGranted, true)
 	equal(e8.RareItemDefinitionId, "item_chieftain_fang")
 
-	-- Ineligible participant 9: an honest non-qualifier event, never a fabricated reward.
+	-- Ineligible participant 9: Qualified = false AND RewardGranted = false, never a fabricated reward.
 	local e9 = onlyBossEvent(f, 9)
 	equal(e9.Qualified, false)
+	equal(e9.RewardGranted, false)
 	equal(e9.GoldAwarded, 0)
 	equal(e9.CommonItemDefinitionId, nil)
 	equal(e9.RareItemDefinitionId, nil)
@@ -719,10 +722,35 @@ test("rare-drop absence is represented correctly in the personal-reward event", 
 	hitBoss(f, 7, boss.RuntimeId, 40) -- solo kill, eligible
 	local e = onlyBossEvent(f, 7)
 	equal(e.Qualified, true)
+	equal(e.RewardGranted, true)
 	equal(e.CommonItemDefinitionId, "item_iron_bar")
 	equal(e.CommonItemAmount, 1)
 	equal(e.RareItemDefinitionId, nil)
 	equal(e.RareItemAmount, nil)
+end)
+
+test("an eligible participant whose atomic reward grant fails emits Qualified = true, RewardGranted = false, with no reward data", function()
+	local f = fixture()
+	f.Roll01.Value = 0 -- a rare would roll, but the grant fails before anything is credited
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	local boss = assert(f.Composition.Services.Enemies.Create(EnemyIds.GoblinChieftain))
+	f.CombatDistances[boss.RuntimeId] = 1
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+	hitBoss(f, 7, boss.RuntimeId, 39) -- 390 dmg: past the eligibility threshold, boss still alive (10 HP)
+	-- Max out Gold so the boss reward's atomic PlayerData mutation (Gold credit) fails on the kill.
+	assert(f.PlayerData.Update(7, function(data) data.Gold = EconomyService.MaximumGold end))
+	hitBoss(f, 7, boss.RuntimeId, 1) -- the killing hit; the reward transaction aborts
+	local e = onlyBossEvent(f, 7)
+	equal(e.Qualified, true) -- they met the contribution threshold
+	equal(e.RewardGranted, false) -- but the atomic grant failed
+	equal(e.GoldAwarded, 0)
+	equal(e.CommonItemDefinitionId, nil)
+	equal(e.RareItemDefinitionId, nil)
+	assertOnlyRewardKeys(e) -- and the internal FailureReason is never exposed
+	-- The failed grant left authoritative state untouched: no common item, and Gold only what was set.
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_bar, nil)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), EconomyService.MaximumGold)
 end)
 
 test("a normal Goblin kill emits no boss personal-reward event", function()
@@ -785,36 +813,46 @@ test("a personal-reward event delivery failure never changes or duplicates the a
 	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + boss.GoldReward)
 end)
 
-test("PlayerEvents sanitizes to presentation-only fields, rejects unknown events, blocks fabricated non-qualifier rewards, and isolates delivery failures", function()
+test("PlayerEvents keeps Qualified/RewardGranted distinct, enforces the reward invariants, and isolates delivery failures", function()
 	local PlayerEvents = require("CompositionPlayerEvents")
 	local sent = {}
 	local pe = PlayerEvents.New({ Send = function(userId, eventId, payload) table.insert(sent, { UserId = userId, EventId = eventId, Payload = payload }) end })
-	-- A well-formed reward is sanitized: internal/extra fields are dropped, only presentation kept.
+	-- A well-formed granted reward is sanitized: internal/extra fields dropped, only presentation kept.
 	local ok = pe.Emit(7, EventIds.BossPersonalReward, {
-		BossDefinitionId = EnemyIds.GoblinChieftain, Qualified = true, GoldAwarded = 50,
+		BossDefinitionId = EnemyIds.GoblinChieftain, Qualified = true, RewardGranted = true, GoldAwarded = 50,
 		CommonItemDefinitionId = "item_iron_bar", CommonItemAmount = 1,
 		RareItemDefinitionId = "item_chieftain_fang", RareItemAmount = 1,
 		Contribution = 400, FailureReason = "secret", MilestoneRecorded = true, Extra = {},
 	})
 	equal(ok, true)
 	equal(#sent, 1)
-	equal(sent[1].UserId, 7)
 	local p = sent[1].Payload
+	equal(p.Qualified, true)
+	equal(p.RewardGranted, true)
 	equal(p.Contribution, nil)
-	equal(p.FailureReason, nil)
+	equal(p.FailureReason, nil) -- internal failure reason never crosses the boundary
 	equal(p.MilestoneRecorded, nil)
 	equal(p.Extra, nil)
 	equal(p.RareItemAmount, 1)
-	-- Unknown event id rejected; nothing sent.
+	-- The two legitimate non-reward states pass and carry no reward data.
+	equal(select(1, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = false, RewardGranted = false, GoldAwarded = 0 })), true)
+	equal(select(1, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, RewardGranted = false, GoldAwarded = 0 })), true)
+	local nonRewardCount = #sent
+	-- Missing RewardGranted is malformed.
+	equal(select(2, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, GoldAwarded = 0 })), "InvalidRewardGranted")
+	-- A reward granted to a non-qualifier is impossible.
+	equal(select(2, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = false, RewardGranted = true, GoldAwarded = 0 })), "GrantedRequiresQualified")
+	-- Reward data with RewardGranted = false is rejected (covers both non-qualifiers and failed grants).
+	equal(select(2, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, RewardGranted = false, GoldAwarded = 100 })), "UngrantedCannotCarryReward")
+	equal(select(2, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, RewardGranted = false, GoldAwarded = 0, CommonItemDefinitionId = "item_iron_bar", CommonItemAmount = 1 })), "UngrantedCannotCarryReward")
+	-- None of those malformed attempts were delivered.
+	equal(#sent, nonRewardCount)
+	-- Unknown event id and invalid userId are rejected.
 	equal(select(1, pe.Emit(7, "not_a_real_event", { X = 1 })), false)
-	equal(#sent, 1)
-	-- A non-qualifier carrying reward data is rejected at the boundary.
-	equal(select(1, pe.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = false, GoldAwarded = 100 })), false)
-	-- Invalid userId rejected.
-	equal(select(1, pe.Emit(0, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, GoldAwarded = 0 })), false)
+	equal(select(1, pe.Emit(0, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, RewardGranted = true, GoldAwarded = 0 })), false)
 	-- A throwing transport is contained: Emit reports DeliveryFailed and never propagates.
 	local throwing = PlayerEvents.New({ Send = function() error("down", 0) end })
-	local okThrow, reason = throwing.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, GoldAwarded = 0 })
+	local okThrow, reason = throwing.Emit(7, EventIds.BossPersonalReward, { BossDefinitionId = "b", Qualified = true, RewardGranted = true, GoldAwarded = 0 })
 	equal(okThrow, false)
 	equal(reason, "DeliveryFailed")
 end)
