@@ -71,6 +71,7 @@ function Interface.New(player: Player)
 		ForgeCraft = function(_recipeId: string, _request: { Quantity: number?, Max: boolean? }?) end,
 		Equip = function(_slotId: string, _instanceId: string) end,
 		Ascend = function() end,
+		AcknowledgeStarterFocus = function() end,
 		SetOfflineFocus = function(_skillId: string) end,
 		SelectMastery = function(_skillId: string, _nodeId: string) end,
 		RespecMastery = function(_skillId: string) end,
@@ -133,6 +134,25 @@ function Interface.New(player: Player)
 	local function setStatus(text: string)
 		status.Text = text
 	end
+
+	-- ===== Current objective (top-center, below status): the compact guided-onboarding surface =====
+	-- Simulator-style single line, not a quest log. Tappable so the starter-focus step can reopen its
+	-- framing panel. All completion is server-authoritative; this only presents the derived step.
+	local objective = make("TextButton", {
+		Size = UDim2.new(0, 460, 0, 46), Position = UDim2.new(0.5, 0, 0, 48), AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.15, AutoButtonColor = false, Text = "", Visible = false,
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, objective)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 1.5, Transparency = 0.35 }, objective)
+	make("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, objective)
+	local objectiveTitle = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 15,
+		TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+	}, objective)
+	local objectiveHint = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 15), Position = UDim2.new(0, 0, 0, 21), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		TextSize = 12, TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, Text = "", TextTruncate = Enum.TextTruncate.AtEnd,
+	}, objective)
 
 	-- ===== Toast (temporary, center): provisional presentation for pushed reward outcomes =====
 	local toast = make("TextLabel", {
@@ -235,6 +255,7 @@ function Interface.New(player: Player)
 	local offlinePanel, offlineContent = panel("Offline Training")
 	local shopPanel, shopContent = panel("Shop — Hub", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
+	local starterPanel, starterContent = panel("Choose Your Focus", 300)
 
 	local function hideAllPanels()
 		forgePanel.Visible = false
@@ -243,6 +264,46 @@ function Interface.New(player: Player)
 		offlinePanel.Visible = false
 		shopPanel.Visible = false
 		masteryPanel.Visible = false
+		starterPanel.Visible = false
+	end
+
+	-- ---- Starter-focus framing panel ----
+	-- The slice's version of the designed starter-weapon moment. Sword is the only functional combat
+	-- style in the slice, so Bow/Staff are shown but clearly unavailable rather than pretending their
+	-- systems exist. Confirming Sword sends the intent to the server (which records the acknowledgement
+	-- flag); it grants no equipment -- the existing StarterKit already equips the slice gear.
+	make("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, starterContent)
+	make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 54), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text,
+		TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, LayoutOrder = 0,
+		Text = "Pick your starting combat focus. This is an initial focus, not a permanent class — you can train every skill freely.",
+	}, starterContent)
+	local STARTER_CHOICES = {
+		{ Label = "Sword", Available = true },
+		{ Label = "Bow", Available = false },
+		{ Label = "Staff", Available = false },
+	}
+	for index, choice in STARTER_CHOICES do
+		local row = make("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = index }, starterContent)
+		make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+		make("TextLabel", {
+			Size = UDim2.new(1, -120, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium,
+			TextSize = 15, TextColor3 = if choice.Available then COLORS.Text else COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left,
+			Text = if choice.Available then choice.Label else (choice.Label .. "  (coming later)"),
+		}, row)
+		local act = make("TextButton", {
+			Size = UDim2.new(0, 100, 0, 30), Position = UDim2.new(1, -108, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+			BackgroundColor3 = if choice.Available then COLORS.ButtonOn else Color3.fromRGB(45, 47, 55), Font = Enum.Font.GothamMedium,
+			TextSize = 13, TextColor3 = if choice.Available then COLORS.Text else COLORS.Dim,
+			Text = if choice.Available then "Confirm" else "Unavailable", Active = choice.Available, AutoButtonColor = choice.Available,
+		}, row)
+		make("UICorner", { CornerRadius = UDim.new(0, 6) }, act)
+		if choice.Available then
+			act.Activated:Connect(function()
+				handlers.AcknowledgeStarterFocus()
+				starterPanel.Visible = false
+			end)
+		end
 	end
 
 	-- Latest state cache so re-rendering a panel uses current data.
@@ -778,10 +839,56 @@ function Interface.New(player: Player)
 		showToast(table.concat(lines, "\n"), COLORS.Good)
 	end
 
+	-- Renders the compact current-objective surface from the sanitized authoritative Onboarding view and
+	-- surfaces brief step-advance/completion feedback. The server owns completion; this only presents it.
+	-- The step id mirrors Onboarding/Definitions StepIds.StarterFocus (a stable id).
+	local STARTER_FOCUS_STEP_ID = "onboarding_starter_focus"
+	local lastObjectiveStepId: string? = nil
+	local starterAutoOpened = false
+	local function renderObjective(state: any)
+		local ob = state.Onboarding
+		if type(ob) ~= "table" then
+			return
+		end
+		if ob.Complete == true then
+			objective.Visible = false
+			if lastObjectiveStepId ~= nil and lastObjectiveStepId ~= "__complete__" then
+				showToast("You're now an Adept — your guided journey is complete!", COLORS.Good)
+			end
+			lastObjectiveStepId = "__complete__"
+			return
+		end
+		objective.Visible = true
+		local progressText = ""
+		local progress = ob.Progress
+		if type(progress) == "table" and type(progress.Current) == "number" and type(progress.Required) == "number" then
+			progressText = ("   %d / %d"):format(progress.Current, progress.Required)
+		end
+		objectiveTitle.Text = ("Objective: %s%s"):format(tostring(ob.Title), progressText)
+		objectiveHint.Text = tostring(ob.Hint)
+		if ob.StepId == STARTER_FOCUS_STEP_ID and not starterAutoOpened then
+			starterAutoOpened = true
+			hideAllPanels()
+			starterPanel.Visible = true
+		end
+		if lastObjectiveStepId ~= nil and lastObjectiveStepId ~= "__complete__" and lastObjectiveStepId ~= ob.StepId then
+			showToast(("Objective complete!\nNext: %s"):format(tostring(ob.Title)), COLORS.Good)
+		end
+		lastObjectiveStepId = ob.StepId
+	end
+	-- Tapping the objective on the starter-focus step reopens its framing panel.
+	objective.Activated:Connect(function()
+		if lastObjectiveStepId == STARTER_FOCUS_STEP_ID then
+			hideAllPanels()
+			starterPanel.Visible = true
+		end
+	end)
+
 	function iface.Update(state: any)
 		lastState = state
 		if type(state) ~= "table" then return end
 		goldLabel.Text = "Gold: " .. tostring(state.Gold)
+		renderObjective(state)
 		if state.Health then
 			healthLabel.Text = ("Health: %d / %d"):format(math.floor(state.Health.Health + 0.5), state.Health.MaxHealth)
 		end

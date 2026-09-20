@@ -42,6 +42,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	local currentStationId: string? = nil
 	local currentTarget: string? = nil
 	local currentTargetLabel: string? = nil
+	-- The current onboarding objective's world target (sanitized read-model hint), used only to
+	-- highlight the relevant nearby object. Presentation-only: it never decides step completion.
+	local objectiveTarget: any = nil
 
 	local function rootPosition(): Vector3?
 		local character = player.Character
@@ -60,6 +63,8 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			if equipmentVisuals then
 				equipmentVisuals.Apply(result.Equipment)
 			end
+			-- Presentation-only guidance hint for the current objective (highlighted in the proximity loop).
+			objectiveTarget = if type(result.Onboarding) == "table" and result.Onboarding.Complete ~= true then result.Onboarding.Target else nil
 			return result
 		end
 		return nil
@@ -112,6 +117,71 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		return bestId, bestLabel, bestDist
 	end
 
+	-- ===== Objective guidance highlight (presentation-only) =====
+	-- Subtly highlights the nearest world object relevant to the CURRENT objective only. It never
+	-- decides completion; the server owns that. Enemies are tagged models; static world objects are
+	-- invisible anchor parts carrying a "Visual" mesh child, so we adorn the visible mesh when present.
+	local GUIDE_RADIUS = 90
+	local guidanceHighlight = Instance.new("Highlight")
+	guidanceHighlight.Name = "AR_ObjectiveGuide"
+	guidanceHighlight.FillColor = Color3.fromRGB(120, 180, 255)
+	guidanceHighlight.FillTransparency = 0.8
+	guidanceHighlight.OutlineColor = Color3.fromRGB(150, 205, 255)
+	guidanceHighlight.OutlineTransparency = 0
+	guidanceHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	guidanceHighlight.Enabled = false
+	guidanceHighlight.Parent = workspace
+
+	local function adorneeFor(inst: Instance): Instance?
+		local visual = inst:FindFirstChild("Visual")
+		if visual and visual:IsA("Model") then
+			return visual
+		end
+		if inst:IsA("Model") or inst:IsA("BasePart") then
+			return inst
+		end
+		return nil
+	end
+	local function positionOf(inst: Instance): Vector3?
+		if inst:IsA("Model") then
+			return inst:GetPivot().Position
+		elseif inst:IsA("BasePart") then
+			return inst.Position
+		end
+		return nil
+	end
+	local function updateGuidance(position: Vector3?)
+		local target = objectiveTarget
+		if not position or type(target) ~= "table" or type(target.Tag) ~= "string" then
+			guidanceHighlight.Enabled = false
+			guidanceHighlight.Adornee = nil
+			return
+		end
+		local best: Instance? = nil
+		local bestDist: number? = nil
+		for _, inst in CollectionService:GetTagged(target.Tag) do
+			if inst:IsDescendantOf(workspace) then
+				local matches = target.MatchAttribute == nil or inst:GetAttribute(target.MatchAttribute) == target.MatchValue
+				if matches and inst:GetAttribute("EnemyAlive") == false then
+					matches = false -- a dead/fading enemy is not a live objective target
+				end
+				if matches then
+					local p = positionOf(inst)
+					if p then
+						local d = (position - p).Magnitude
+						if d <= GUIDE_RADIUS and (bestDist == nil or d < bestDist) then
+							best = inst
+							bestDist = d
+						end
+					end
+				end
+			end
+		end
+		local adornee = if best then adorneeFor(best) else nil
+		guidanceHighlight.Adornee = adornee
+		guidanceHighlight.Enabled = adornee ~= nil
+	end
+
 	-- ===== Proximity / targeting loop =====
 	local proximityAccum = 0
 	RunService.Heartbeat:Connect(function(dt)
@@ -121,6 +191,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		local position = rootPosition()
 		if not position then
 			iface.SetContext({ TrainingActive = trainingActive, MiningActive = miningActive })
+			updateGuidance(nil)
 			return
 		end
 		local station = nearestTagged(STATION_TAG, position, INTERACT_RADIUS)
@@ -139,6 +210,8 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			TrainingActive = trainingActive,
 			MiningActive = miningActive,
 		})
+
+		updateGuidance(position)
 
 		-- Keep client mining state honest: if we drift out of range while mining, end it so the
 		-- server session and the UI agree (the server also fails such a session closed on settle).
@@ -315,6 +388,15 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	iface.Handlers.Ascend = function()
 		local ok, _, reason = net.Request(RequestIds.AscensionAscend, { RankId = AscensionIds.Adept })
 		iface.SetStatus(if ok then "Ascended to Adept!" else ("Ascend: " .. reasonText(reason)))
+		refresh()
+	end
+
+	-- ===== Starter focus (onboarding step 1) =====
+	-- Forwards the one-time starter-focus acknowledgement. The server records the flag; the client
+	-- grants nothing. The Sword gear itself is already granted by the server StarterKit on first ready.
+	iface.Handlers.AcknowledgeStarterFocus = function()
+		local ok, _, reason = net.Request(RequestIds.OnboardingAcknowledgeStarterFocus, nil)
+		iface.SetStatus(if ok then "Starter focus set: Sword. Time to train!" else ("Focus: " .. reasonText(reason)))
 		refresh()
 	end
 

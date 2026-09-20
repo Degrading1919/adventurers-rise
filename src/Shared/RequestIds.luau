@@ -22,6 +22,7 @@ local ids: { [string]: string } = {
 	GatheringEnd = "gathering_end",
 	TrainingBegin = "training_begin",
 	TrainingEnd = "training_end",
+	OnboardingAcknowledgeStarterFocus = "onboarding_acknowledge_starter_focus",
 }
 
 local byId: { [string]: boolean } = {}

@@ -20,6 +20,7 @@ local AscensionService = require(script.Parent.Parent.Ascension.Service)
 local MasteryService = require(script.Parent.Parent.Mastery.Service)
 local OfflineTrainingService = require(script.Parent.Parent.OfflineTraining.Service)
 local PlayerHealthService = require(script.Parent.Parent.PlayerHealth.Service)
+local OnboardingService = require(script.Parent.Parent.Onboarding.Service)
 
 local RequestIds = require(game:GetService("ReplicatedStorage").Shared.RequestIds)
 local GatheringSessions = require(script.Parent.GatheringSessions)
@@ -267,9 +268,25 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		end
 	end
 
-	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
+	-- Onboarding guidance: derives the fresh player's current step from durable state/flags and owns the
+	-- trusted writes that latch historical onboarding milestones. It needs only Skills (level reads) and
+	-- Economy (the atomic post-training Gold reward); everything else it reads from data.
+	local onboarding = OnboardingService.New(playerData, { Skills = skills, Economy = economy })
+
+	-- Onboarding first-ore milestone: recorded only from a real Mining settlement that actually awarded
+	-- Iron Ore (onboarding filters by item), so buying ore never satisfies it. Best-effort and pcall-
+	-- isolated so an onboarding write can never break the shared gathering-settlement heartbeat.
+	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock, function(userId: number, result: any)
+		if type(result) == "table" and type(result.OreAmount) == "number" and result.OreAmount > 0 then
+			pcall(onboarding.NoteOreGathered, userId, result.OreDefinitionId)
+		end
+	end)
 	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock, nearStation)
-	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn, announceBossReward)
+	-- CombatRewards reports the consumed normal-enemy defeat with its definition id; onboarding records
+	-- the one-time "first Goblin defeated" milestone only for an actual Goblin.
+	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn, announceBossReward, function(userId: number, definitionId: string)
+		onboarding.NoteGoblinDefeated(userId, definitionId)
+	end)
 
 	local gameplayReady: { [number]: boolean } = {}
 	local offlineReturnSummaries: { [number]: any } = {}
@@ -285,6 +302,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		Ascension = ascension,
 		OfflineTraining = offlineTraining,
 		PlayerHealth = playerHealth,
+		Onboarding = onboarding,
 	}, offlineReturnSummaries)
 
 	local composition = {}
@@ -305,6 +323,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		Mastery = mastery,
 		OfflineTraining = offlineTraining,
 		PlayerHealth = playerHealth,
+		Onboarding = onboarding,
 		-- World's heartbeat drives this to resolve enemy attacks; exposed here so Bootstrap can inject
 		-- it into World.Start alongside the Enemies service.
 		EnemyCombat = enemyCombat,
@@ -411,6 +430,12 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		return plots.UpgradeStation(userId, payload.StationId)
 	end
 
+	handlers[RequestIds.OnboardingAcknowledgeStarterFocus] = function(userId: number, _payload: any): (any?, string?)
+		-- The only onboarding write a client may trigger: record that the starter-focus framing was
+		-- confirmed. It grants no gold/items and cannot mark any other step complete.
+		return onboarding.AcknowledgeStarterFocus(userId)
+	end
+
 	handlers[RequestIds.OfflineTrainingSetFocus] = function(userId: number, payload: any): (any?, string?)
 		if type(payload) ~= "table" or type(payload.SkillId) ~= "string" then
 			return nil, "MalformedPayload"
@@ -448,7 +473,13 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		elseif payload.Quantity ~= nil then
 			craftRequest = { Quantity = payload.Quantity }
 		end
-		return crafting.Craft(userId, payload.RecipeId, craftRequest)
+		local result, reason = crafting.Craft(userId, payload.RecipeId, craftRequest)
+		if result then
+			-- A successful craft actually used the Forge: record the Smelting milestone only for the Iron
+			-- Bar recipe (onboarding filters by recipe id). Best-effort; never fails the craft.
+			pcall(onboarding.NoteBarSmithed, userId, payload.RecipeId)
+		end
+		return result, reason
 	end
 
 	handlers[RequestIds.AscensionAscend] = function(userId: number, payload: any): (any?, string?)
@@ -527,6 +558,15 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			return { Ok = false, Result = nil, Reason = "RequestThrottled" }
 		end
 		userThrottle[requestId] = now
+
+		-- Reconcile onboarding before serving the request so heartbeat-driven progress (training XP,
+		-- gathered ore) and the once-only post-training Gold reward are latched, and the StateGet the
+		-- client polls reflects the current authoritative step. Isolated so a reconcile hiccup can never
+		-- fail a gameplay request; onboarding writes are idempotent and simply retry next request.
+		local settled = pcall(onboarding.Settle, userId)
+		if not settled then
+			runtime.Warn(("[Composition] Onboarding settle failed for %d"):format(userId))
+		end
 
 		local ok, result, reason = pcall(handler, userId, payload)
 		if not ok then

@@ -8,6 +8,7 @@ local AscensionIds = require("AscensionIds")
 local ProgressionFlagIds = require("ProgressionFlagIds")
 local MasteryIds = require("MasteryIds")
 local EventIds = require("EventIds")
+local OnboardingDefinitions = require("OnboardingDefinitions")
 local SkillCurves = require("SkillCurves")
 local EconomyService = require("EconomyService")
 local PlayerDataSchema = require("PlayerDataSchema")
@@ -1408,6 +1409,153 @@ test("returned read-model tables are copy-isolated", function()
 	local second = assert(request(f, 7, RequestIds.StateGet, {}).Result)
 	assert(second.Gold ~= 999999)
 	assert(second.Skills[SkillIds.Melee].XP ~= 999999)
+end)
+
+-- ===== Onboarding guidance (end-to-end through the real request boundary + read model) =====
+local Steps = OnboardingDefinitions.StepIds
+local function onboarding(f, userId)
+	-- Nudge the monotonic clock past the per-request throttle so repeated reads in one test are served.
+	f.Advance(0.1)
+	local res = request(f, userId, RequestIds.StateGet, {})
+	assert(res.Ok, "StateGet failed: " .. tostring(res.Reason))
+	return res.Result.Onboarding
+end
+-- Sets a persisted progression flag directly (test setup only -- never a client-reachable path), used
+-- to advance a player to a specific onboarding step without replaying the whole chain.
+local function setFlag(f, userId, flagId)
+	assert(f.PlayerData.Update(userId, function(data) data.ProgressionFlags[flagId] = true end))
+end
+local function seedToStep(f, userId)
+	setSkillLevel(f, userId, SkillIds.Melee, 2)
+	setSkillLevel(f, userId, SkillIds.Defense, 2)
+	setFlag(f, userId, ProgressionFlagIds.OnboardingStarterFocusAcknowledged)
+	setFlag(f, userId, ProgressionFlagIds.OnboardingFirstGoblinDefeated)
+	setFlag(f, userId, ProgressionFlagIds.OnboardingGoldMilestoneReached)
+end
+
+test("onboarding: a fresh player's read model begins at the starter-focus step", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local ob = onboarding(f, 7)
+	equal(ob.Complete, false)
+	equal(ob.StepId, Steps.StarterFocus)
+	equal(ob.Index, 1)
+end)
+
+test("onboarding: acknowledging the starter focus advances to Train Melee via the intended request", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local ack = request(f, 7, RequestIds.OnboardingAcknowledgeStarterFocus, nil)
+	assert(ack.Ok, ack.Reason)
+	equal(onboarding(f, 7).StepId, Steps.TrainMelee)
+end)
+
+test("onboarding: the post-training Gold reward is granted exactly once through the request path", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.OnboardingAcknowledgeStarterFocus, nil).Ok)
+	setSkillLevel(f, 7, SkillIds.Melee, 2)
+	setSkillLevel(f, 7, SkillIds.Defense, 2)
+	local before = assert(f.Composition.Services.Economy.GetGold(7))
+	-- The reconcile runs on the next request (StateGet), granting the one-time reward and advancing.
+	local ob = onboarding(f, 7)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), before + OnboardingDefinitions.TrainingRewardGold)
+	equal(ob.StepId, Steps.FightGoblins)
+	-- Further requests never re-grant it.
+	onboarding(f, 7)
+	onboarding(f, 7)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), before + OnboardingDefinitions.TrainingRewardGold)
+end)
+
+test("onboarding: an actual Goblin defeat advances the fight step; a mere hit does not", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	assert(request(f, 7, RequestIds.OnboardingAcknowledgeStarterFocus, nil).Ok)
+	setSkillLevel(f, 7, SkillIds.Melee, 2)
+	setSkillLevel(f, 7, SkillIds.Defense, 2)
+	equal(onboarding(f, 7).StepId, Steps.FightGoblins)
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[enemy.RuntimeId] = 1
+	-- One non-lethal hit (MaxHealth 30, weapon damage 10): the milestone must NOT latch.
+	assert(request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId }).Ok)
+	f.Advance(2)
+	equal(onboarding(f, 7).StepId, Steps.FightGoblins)
+	-- Finish it (two more hits): the consumed death records the milestone and advances to Earn Gold.
+	for _ = 1, 2 do
+		assert(request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = enemy.RuntimeId }).Ok)
+		f.Advance(2)
+	end
+	equal(onboarding(f, 7).StepId, Steps.EarnGold)
+end)
+
+test("onboarding: progress survives disconnect/reconnect and resumes at the correct step", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(request(f, 7, RequestIds.OnboardingAcknowledgeStarterFocus, nil).Ok)
+	setSkillLevel(f, 7, SkillIds.Melee, 2)
+	setSkillLevel(f, 7, SkillIds.Defense, 2)
+	equal(onboarding(f, 7).StepId, Steps.FightGoblins)
+	leavePlayer(f, 7)
+	assert(joinPlayer(f, 7))
+	equal(onboarding(f, 7).StepId, Steps.FightGoblins)
+end)
+
+test("onboarding: a client cannot skip steps or fabricate Gold via an unknown or spoofed request", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	-- No request exists to mark a step complete or set a flag; an unknown id is rejected.
+	local spoof = request(f, 7, "onboarding_force_complete", { StepId = Steps.AscendAdept })
+	equal(spoof.Ok, false)
+	equal(spoof.Reason, "UnknownRequest")
+	-- The acknowledge request ignores any payload and only sets the one flag -- one step, no Gold.
+	assert(request(f, 7, RequestIds.OnboardingAcknowledgeStarterFocus, { StepId = Steps.AscendAdept, Gold = 9999 }).Ok)
+	equal(onboarding(f, 7).StepId, Steps.TrainMelee)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), 0)
+end)
+
+test("onboarding: buying Iron Ore never completes Mine Ore, but an actual Mining award does", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantPickaxe(f, 7)
+	seedToStep(f, 7)
+	equal(onboarding(f, 7).StepId, Steps.MineOre)
+	-- Buy Iron Ore from the hub shop: legitimate, but it must NOT complete the Mining objective.
+	assert(f.PlayerData.Update(7, function(data) data.Gold = 100 end))
+	assert(request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 2 }).Ok)
+	equal(onboarding(f, 7).StepId, Steps.MineOre)
+	-- Actually gather Iron Ore: a real Mining settlement records the milestone and advances.
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
+	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
+	f.Advance(5)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+end)
+
+test("onboarding: owning an Iron Bar never completes Smelt Bar; a successful Iron Bar craft does", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	seedToStep(f, 7)
+	setFlag(f, 7, ProgressionFlagIds.OnboardingFirstOreGathered)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+	-- An injected Iron Bar (as if bought or granted) must NOT complete Smelting.
+	assert(f.PlayerData.Update(7, function(data) data.Inventory.Stacks.item_iron_bar = 3 end))
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+	-- Give ore and craft the Iron Bar recipe at the Forge (forge distance defaults to 0): this records it.
+	assert(f.PlayerData.Update(7, function(data) data.Inventory.Stacks.item_iron_ore = 4 end))
+	assert(request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Quantity = 1 }).Ok)
+	equal(onboarding(f, 7).StepId, Steps.AcquireUpgrade)
+end)
+
+test("onboarding: a failed Iron Bar craft does not complete Smelt Bar", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	seedToStep(f, 7)
+	setFlag(f, 7, ProgressionFlagIds.OnboardingFirstOreGathered)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+	-- No ore in inventory: the craft fails, so no Smelting milestone is recorded.
+	local failed = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Quantity = 1 })
+	equal(failed.Ok, false)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
 end)
 
 print(("%d Composition checks passed"):format(passed))
