@@ -23,6 +23,11 @@ local ATTR_ENEMY_DEFINITION_ID = "EnemyDefinitionId"
 local ATTR_ENEMY_RUNTIME_ID = "EnemyRuntimeId"
 local ATTR_ENEMY_LEVEL = "EnemyLevel"
 local ATTR_ENEMY_ALIVE = "EnemyAlive"
+-- Sanitized current/max health mirrored onto the bound enemy model purely for client presentation
+-- (target and boss health bars). These are a READ-ONLY reflection of the authoritative Enemies runtime
+-- state; the client never writes them back and no gameplay logic reads them. World owns the mirror.
+local ATTR_ENEMY_HEALTH = "EnemyHealth"
+local ATTR_ENEMY_MAX_HEALTH = "EnemyMaxHealth"
 local ATTR_GATHERING_NODE_ID = "GatheringNodeId"
 local ATTR_STATION_ID = "StationId"
 
@@ -100,6 +105,19 @@ export type AttackCandidate = {
 -- provoked by that player) and nil otherwise -- pick the NEAREST candidate the enemy is actually
 -- engaged with. A closer candidate the resolver rejects (a passive, overleveled player) is skipped, so
 -- it can never shield an eligible player standing behind it. Returns the chosen candidate and result.
+-- Pure, deterministic sanitization of an authoritative Enemy runtime state into the two values the
+-- client may present. Never trusts the state blindly: a dead enemy (or a missing/negative health)
+-- always yields 0 current health, and current health is clamped into [0, MaxHealth]. It returns a
+-- fresh table and never mutates its input, so it can be reused for any archetype (normal or boss) and
+-- can never become a second health authority.
+function Service.SanitizeEnemyHealth(state: any): { Health: number, MaxHealth: number }
+	local maxHealth = if type(state) == "table" and type(state.MaxHealth) == "number" and state.MaxHealth > 0 and state.MaxHealth < math.huge then math.floor(state.MaxHealth) else 0
+	local alive = type(state) == "table" and state.Alive == true
+	local rawHealth = if alive and type(state.Health) == "number" and state.Health == state.Health then state.Health else 0
+	local health = math.clamp(math.floor(rawHealth), 0, maxHealth)
+	return { Health = health, MaxHealth = maxHealth }
+end
+
 function Service.SelectAttackTarget(candidates: { AttackCandidate }, resolveAttack: (number) -> (any?, string?)): (AttackCandidate?, any?)
 	local ordered = table.clone(candidates)
 	table.sort(ordered, function(a, b)
@@ -167,6 +185,14 @@ function Service.New(runtime: Runtime)
 	local function enemyLabelText(definitionId: string, level: any): string
 		local displayName = if definitionId == "enemy_goblin_chieftain" then "Goblin Chieftain" else "Goblin"
 		return displayName .. " Lv" .. tostring(level)
+	end
+
+	-- Mirrors the sanitized authoritative health onto the bound model for client presentation only. It
+	-- reads the runtime state and writes two attributes; it never mutates the runtime.
+	local function writeEnemyHealth(model: Model, state: any)
+		local health = Service.SanitizeEnemyHealth(state)
+		model:SetAttribute(ATTR_ENEMY_MAX_HEALTH, health.MaxHealth)
+		model:SetAttribute(ATTR_ENEMY_HEALTH, health.Health)
 	end
 
 	-- CombatDistanceProvider: (attackerUserId, enemyState) -> (distance, reason). Eligibility (Alive)
@@ -379,6 +405,7 @@ function Service.New(runtime: Runtime)
 		model:SetAttribute(ATTR_ENEMY_RUNTIME_ID, state.RuntimeId)
 		model:SetAttribute(ATTR_ENEMY_LEVEL, state.Level)
 		model:SetAttribute(ATTR_ENEMY_ALIVE, true)
+		writeEnemyHealth(model, state)
 		runtime.Collection:AddTag(model, ENEMY_TAG)
 		model.Parent = container
 		return model, fadeParts
@@ -390,6 +417,8 @@ function Service.New(runtime: Runtime)
 		record.Model:SetAttribute(ATTR_ENEMY_RUNTIME_ID, state.RuntimeId)
 		record.Model:SetAttribute(ATTR_ENEMY_LEVEL, state.Level)
 		record.Model:SetAttribute(ATTR_ENEMY_ALIVE, true)
+		-- A respawn rolls a fresh level, hence fresh MaxHealth/Health -- mirror the new authoritative state.
+		writeEnemyHealth(record.Model, state)
 		for _, part in record.FadeParts do
 			part.Transparency = 0
 		end
@@ -411,6 +440,8 @@ function Service.New(runtime: Runtime)
 		-- active engagement, so retaliation must not linger through the respawn delay. Its cooldown and
 		-- runtime->model mapping are cleared defensively at respawn, when the RuntimeId is retired.
 		enemyCombat.ClearEnemy(record.RuntimeId)
+		-- A dead enemy can never present positive health.
+		record.Model:SetAttribute(ATTR_ENEMY_HEALTH, 0)
 		for _, part in record.FadeParts do
 			part.Transparency = 0.7
 		end
@@ -444,8 +475,14 @@ function Service.New(runtime: Runtime)
 				end
 			else
 				local snapshot = enemies.GetSnapshot(record.RuntimeId)
-				if snapshot and snapshot.Alive == false then
-					markDead(record, enemyCombat)
+				if snapshot then
+					if snapshot.Alive == false then
+						markDead(record, enemyCombat)
+					else
+						-- Mirror the authoritative current health onto the model so client target/boss bars
+						-- track ongoing damage. Read-only: this never feeds back into the Enemies runtime.
+						writeEnemyHealth(record.Model, snapshot)
+					end
 				end
 			end
 		end
@@ -574,16 +611,19 @@ function Service.New(runtime: Runtime)
 
 	-- Read-only diagnostic view of the runtime-to-instance binding, for verification. Never a gameplay
 	-- authority: it reports, it does not decide.
-	function service.DescribeEnemies(): { { RuntimeId: string, DefinitionId: string, Alive: any, Position: { number } } }
+	function service.DescribeEnemies(): { { RuntimeId: string, DefinitionId: string, Alive: any, Health: any, MaxHealth: any, Position: { number } } }
 		local out = {}
 		for _, record in records do
 			local body = record.Model.PrimaryPart
-			local position = if body then body.Position else Vector3.zero
+			local position = body and body.Position
 			table.insert(out, {
 				RuntimeId = record.RuntimeId,
 				DefinitionId = record.DefinitionId,
 				Alive = record.Model:GetAttribute(ATTR_ENEMY_ALIVE),
-				Position = { position.X, position.Y, position.Z },
+				-- The mirrored presentation health (a read-back of the attributes the client reads).
+				Health = record.Model:GetAttribute(ATTR_ENEMY_HEALTH),
+				MaxHealth = record.Model:GetAttribute(ATTR_ENEMY_MAX_HEALTH),
+				Position = if position then { position.X, position.Y, position.Z } else { 0, 0, 0 },
 			})
 		end
 		return out

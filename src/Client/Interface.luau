@@ -167,22 +167,40 @@ function Interface.New(player: Player)
 		PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
 		PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12),
 	}, toast)
-	local toastToken = 0
-	local function showToast(text: string, accent: Color3)
-		toast.Text = text
+	-- One shared toast queue so every brief notification (onboarding step, boss reward, level-up,
+	-- Mastery Point, aggregated gains) uses the same presentation and they never stomp each other.
+	local toastQueue: { { Text: string, Accent: Color3 } } = {}
+	local toastBusy = false
+	local pumpToast: () -> ()
+	function pumpToast()
+		if toastBusy then
+			return
+		end
+		local entry = table.remove(toastQueue, 1)
+		if not entry then
+			toast.Visible = false
+			return
+		end
+		toastBusy = true
+		toast.Text = entry.Text
 		toast.TextColor3 = COLORS.Text
 		local stroke = toast:FindFirstChildOfClass("UIStroke")
 		if stroke then
-			stroke.Color = accent
+			stroke.Color = entry.Accent
 		end
 		toast.Visible = true
-		toastToken += 1
-		local myToken = toastToken
-		task.delay(6, function()
-			if toastToken == myToken then
-				toast.Visible = false
-			end
+		task.delay(3.4, function()
+			toastBusy = false
+			pumpToast()
 		end)
+	end
+	local function showToast(text: string, accent: Color3)
+		table.insert(toastQueue, { Text = text, Accent = accent })
+		-- Cap the backlog so a burst never keeps the queue busy for too long.
+		while #toastQueue > 6 do
+			table.remove(toastQueue, 1)
+		end
+		pumpToast()
 	end
 
 	-- Presentation-only boss labels; stable IDs stay authoritative.
@@ -190,6 +208,51 @@ function Interface.New(player: Player)
 	local function bossLabel(id: any): string
 		return (type(id) == "string" and BOSS_LABELS[id]) or "the boss"
 	end
+
+	-- Shared helper: drives a health bar's fill fraction and "cur / max" readout from authoritative
+	-- values. The client only DISPLAYS these; it never computes or owns enemy health.
+	local function setHealthBar(fill: Frame, text: TextLabel, health: any, maxHealth: any)
+		local h = if type(health) == "number" then math.max(health, 0) else 0
+		local m = if type(maxHealth) == "number" and maxHealth > 0 then maxHealth else 0
+		local frac = if m > 0 then math.clamp(h / m, 0, 1) else 0
+		fill.Size = UDim2.new(frac, 0, 1, 0)
+		text.Text = ("%d / %d"):format(math.floor(h + 0.5), math.floor(m + 0.5))
+	end
+
+	-- ===== Boss health bar (top-center): prominent shared-encounter presentation =====
+	local bossBar = make("Frame", {
+		Size = UDim2.new(0, 440, 0, 46), Position = UDim2.new(0.5, 0, 0, 104), AnchorPoint = Vector2.new(0.5, 0),
+		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.1, Visible = false,
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, bossBar)
+	make("UIStroke", { Color = COLORS.Bad, Thickness = 2, Transparency = 0.15 }, bossBar)
+	make("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, bossBar)
+	local bossName = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 14,
+		TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Center, Text = "",
+	}, bossBar)
+	local bossTrack = make("Frame", { Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 0, 21), BackgroundColor3 = Color3.fromRGB(50, 52, 60) }, bossBar)
+	make("UICorner", { CornerRadius = UDim.new(0, 4) }, bossTrack)
+	local bossFill = make("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = COLORS.Bad, BorderSizePixel = 0 }, bossTrack)
+	make("UICorner", { CornerRadius = UDim.new(0, 4) }, bossFill)
+	local bossHealthText = make("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = COLORS.Text, Text = "" }, bossTrack)
+
+	-- ===== Current-target readout (compact, above the action bar) =====
+	local targetPanel = make("Frame", {
+		Size = UDim2.new(0, 230, 0, 42), Position = UDim2.new(0.5, 0, 1, -78), AnchorPoint = Vector2.new(0.5, 1),
+		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.2, Visible = false,
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, targetPanel)
+	make("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, targetPanel)
+	local targetName = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 13,
+		TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+	}, targetPanel)
+	local targetTrack = make("Frame", { Size = UDim2.new(1, 0, 0, 12), Position = UDim2.new(0, 0, 0, 19), BackgroundColor3 = Color3.fromRGB(50, 52, 60) }, targetPanel)
+	make("UICorner", { CornerRadius = UDim.new(0, 4) }, targetTrack)
+	local targetFill = make("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = COLORS.Bad, BorderSizePixel = 0 }, targetTrack)
+	make("UICorner", { CornerRadius = UDim.new(0, 4) }, targetFill)
+	local targetHealthText = make("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = COLORS.Text, Text = "" }, targetTrack)
 
 	-- ===== Action bar (bottom): scrollable so it fits narrow screens =====
 	local bar = make("ScrollingFrame", {
@@ -255,6 +318,7 @@ function Interface.New(player: Player)
 	local offlinePanel, offlineContent = panel("Offline Training")
 	local shopPanel, shopContent = panel("Shop — Hub", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
+	local skillsPanel, skillsContent = panel("Skills — Progress", 320)
 	local starterPanel, starterContent = panel("Choose Your Focus", 300)
 
 	local function hideAllPanels()
@@ -264,6 +328,7 @@ function Interface.New(player: Player)
 		offlinePanel.Visible = false
 		shopPanel.Visible = false
 		masteryPanel.Visible = false
+		skillsPanel.Visible = false
 		starterPanel.Visible = false
 	end
 
@@ -801,6 +866,71 @@ function Interface.New(player: Player)
 		end
 	end
 
+	-- ---- Skills progress panel ----
+	-- A compact progress surface distinct from the Mastery detail: per slice skill, the authoritative
+	-- level, XP progress toward the next level (or MAX at the cap), and a shortcut into that skill's
+	-- Mastery tree (badging any available point). All values come straight from the read model.
+	local function openMastery(skillId: string)
+		masterySelectedSkill = skillId
+		hideAllPanels()
+		renderMastery()
+		masteryPanel.Visible = true
+	end
+	local skillsList = make("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ScrollBarThickness = 4,
+		CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, skillsContent)
+	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, skillsList)
+	local function renderSkills()
+		for _, child in skillsList:GetChildren() do
+			if child:IsA("Frame") then
+				child:Destroy()
+			end
+		end
+		if not lastState then
+			return
+		end
+		local order2 = 0
+		for _, skillId in SKILL_ORDER do
+			local s = lastState.Skills and lastState.Skills[skillId]
+			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 52), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, skillsList)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			make("TextLabel", {
+				Size = UDim2.new(1, -104, 0, 18), Position = UDim2.new(0, 8, 0, 4), BackgroundTransparency = 1,
+				Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = ("%s   Lv %d"):format(SKILL_LABELS[skillId], if s then s.Level else 0),
+			}, row)
+			-- XP progress within the current level, or MAX at the cap (XPForNextLevel is nil there).
+			local track = make("Frame", { Size = UDim2.new(1, -104, 0, 12), Position = UDim2.new(0, 8, 0, 26), BackgroundColor3 = Color3.fromRGB(50, 52, 60) }, row)
+			make("UICorner", { CornerRadius = UDim.new(0, 4) }, track)
+			local fill = make("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = COLORS.Accent, BorderSizePixel = 0 }, track)
+			make("UICorner", { CornerRadius = UDim.new(0, 4) }, fill)
+			local progressText = make("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = COLORS.Text, Text = "" }, track)
+			if s and type(s.XPForNextLevel) == "number" and type(s.XPAtLevel) == "number" then
+				local span = s.XPForNextLevel - s.XPAtLevel
+				local into = s.XP - s.XPAtLevel
+				local frac = if span > 0 then math.clamp(into / span, 0, 1) else 0
+				fill.Size = UDim2.new(frac, 0, 1, 0)
+				progressText.Text = ("%d / %d XP"):format(math.floor(into + 0.5), math.floor(span + 0.5))
+			else
+				fill.Size = UDim2.new(1, 0, 1, 0)
+				fill.BackgroundColor3 = COLORS.Good
+				progressText.Text = "MAX"
+			end
+			-- Shortcut into the Mastery tree for this skill, badging any spendable points.
+			local mastery = lastState.Mastery and lastState.Mastery[skillId]
+			local available = if mastery and type(mastery.AvailablePoints) == "number" then mastery.AvailablePoints else 0
+			local masteryBtn = make("TextButton", {
+				Size = UDim2.new(0, 92, 0, 30), Position = UDim2.new(1, -96, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+				BackgroundColor3 = if available > 0 then COLORS.ButtonOn else COLORS.Button, Font = Enum.Font.GothamMedium,
+				TextSize = 12, TextColor3 = COLORS.Text, Text = if available > 0 then ("Mastery (%d)"):format(available) else "Mastery",
+			}, row)
+			make("UICorner", { CornerRadius = UDim.new(0, 6) }, masteryBtn)
+			masteryBtn.Activated:Connect(function() openMastery(skillId) end)
+			order2 += 1
+		end
+	end
+
 	-- ===== Public update / context APIs =====
 	local iface: any = {}
 	iface.Handlers = handlers
@@ -884,7 +1014,94 @@ function Interface.New(player: Player)
 		end
 	end)
 
+	-- Reflects the current combat target and any engaged boss onto the target readout / boss bar. Pure
+	-- presentation of authoritative values the Controller reads from the bound enemy models.
+	function iface.SetCombat(ctx: any)
+		local target = if type(ctx) == "table" then ctx.Target else nil
+		if type(target) == "table" then
+			targetName.Text = ("%s   Lv %s"):format(tostring(target.Name), tostring(target.Level))
+			setHealthBar(targetFill, targetHealthText, target.Health, target.MaxHealth)
+			targetPanel.Visible = true
+		else
+			targetPanel.Visible = false
+		end
+		local boss = if type(ctx) == "table" then ctx.Boss else nil
+		if type(boss) == "table" then
+			bossName.Text = tostring(boss.Name)
+			setHealthBar(bossFill, bossHealthText, boss.Health, boss.MaxHealth)
+			bossBar.Visible = true
+		else
+			bossBar.Visible = false
+		end
+	end
+
+	-- Aggregated Gold/XP gains and level/Mastery feedback, derived by comparing successive AUTHORITATIVE
+	-- snapshots. Presentation only: it reports what the server already granted and never awards anything.
+	-- Gains are buffered and flushed briefly so continuous mining/training never becomes per-tick spam.
+	local gainsGold = 0
+	local gainsXP: { [string]: number } = {}
+	local gainsPending = false
+	local flushCounter = 0
+	local function flushGains()
+		local parts = {}
+		if gainsGold > 0 then
+			table.insert(parts, ("+%d Gold"):format(gainsGold))
+		end
+		for _, skillId in SKILL_ORDER do
+			local amount = gainsXP[skillId]
+			if amount and amount > 0 then
+				table.insert(parts, ("+%d %s XP"):format(amount, SKILL_LABELS[skillId]))
+			end
+		end
+		gainsGold = 0
+		gainsXP = {}
+		gainsPending = false
+		if #parts > 0 then
+			showToast(table.concat(parts, "   "), COLORS.Accent)
+		end
+	end
+	local function detectProgressionFeedback(previous: any, state: any)
+		if type(previous) ~= "table" then
+			return -- the first snapshot only establishes the baseline; never announce pre-existing progress
+		end
+		local prevSkills = if type(previous.Skills) == "table" then previous.Skills else {}
+		local newSkills = if type(state.Skills) == "table" then state.Skills else {}
+		local prevMastery = if type(previous.Mastery) == "table" then previous.Mastery else {}
+		local newMastery = if type(state.Mastery) == "table" then state.Mastery else {}
+		for _, skillId in SKILL_ORDER do
+			local oldS = prevSkills[skillId]
+			local newS = newSkills[skillId]
+			if type(oldS) == "table" and type(newS) == "table" then
+				if type(newS.XP) == "number" and type(oldS.XP) == "number" and newS.XP > oldS.XP then
+					gainsXP[skillId] = (gainsXP[skillId] or 0) + (newS.XP - oldS.XP)
+					gainsPending = true
+				end
+				-- A level gain (with any Mastery Points it unlocked this refresh) is an immediate toast.
+				if type(newS.Level) == "number" and type(oldS.Level) == "number" and newS.Level > oldS.Level then
+					local oldM = prevMastery[skillId]
+					local newM = newMastery[skillId]
+					local pointsDelta = 0
+					if type(oldM) == "table" and type(newM) == "table" and type(newM.EarnedPoints) == "number" and type(oldM.EarnedPoints) == "number" then
+						pointsDelta = newM.EarnedPoints - oldM.EarnedPoints
+					end
+					local extra = if pointsDelta == 1 then "   ·   +1 Mastery Point" elseif pointsDelta > 1 then ("   ·   +%d Mastery Points"):format(pointsDelta) else ""
+					showToast(("%s reached Level %d!%s"):format(SKILL_LABELS[skillId], newS.Level, extra), COLORS.Good)
+				end
+			end
+		end
+		if type(state.Gold) == "number" and type(previous.Gold) == "number" and state.Gold > previous.Gold then
+			gainsGold += (state.Gold - previous.Gold)
+			gainsPending = true
+		end
+		flushCounter += 1
+		if gainsPending and flushCounter >= 3 then
+			flushCounter = 0
+			flushGains()
+		end
+	end
+
 	function iface.Update(state: any)
+		local previous = lastState
 		lastState = state
 		if type(state) ~= "table" then return end
 		goldLabel.Text = "Gold: " .. tostring(state.Gold)
@@ -906,6 +1123,8 @@ function Interface.New(player: Player)
 		if offlinePanel.Visible then renderOffline() end
 		if shopPanel.Visible then renderShop() end
 		if masteryPanel.Visible then renderMastery() end
+		if skillsPanel.Visible then renderSkills() end
+		detectProgressionFeedback(previous, state)
 	end
 
 	-- Opens the Offline panel showing the current focus and the latest While You Were Away summary.
@@ -980,7 +1199,8 @@ function Interface.New(player: Player)
 	forgeBtn.Activated:Connect(function() hideAllPanels(); renderForge(); forgePanel.Visible = true end)
 	gearBtn.Activated:Connect(function() hideAllPanels(); renderGear(); gearPanel.Visible = true end)
 	shopBtn.Activated:Connect(function() hideAllPanels(); renderShop(); shopPanel.Visible = true end)
-	skillsBtn.Activated:Connect(function() hideAllPanels(); renderMastery(); masteryPanel.Visible = true end)
+	-- The Skills button opens the compact progress surface; Mastery is reached from a skill row there.
+	skillsBtn.Activated:Connect(function() hideAllPanels(); renderSkills(); skillsPanel.Visible = true end)
 	ascendBtn.Activated:Connect(function() hideAllPanels(); renderAscend(); ascendPanel.Visible = true end)
 	offlineBtn.Activated:Connect(function() hideAllPanels(); renderOffline(); offlinePanel.Visible = true end)
 

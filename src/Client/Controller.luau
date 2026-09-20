@@ -42,6 +42,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	local currentStationId: string? = nil
 	local currentTarget: string? = nil
 	local currentTargetLabel: string? = nil
+	-- The model of the current combat target, so the objective highlight and combat-target indicator
+	-- can coexist (the combat indicator owns the model when they would otherwise overlap).
+	local currentTargetModel: Instance? = nil
 	-- The current onboarding objective's world target (sanitized read-model hint), used only to
 	-- highlight the relevant nearby object. Presentation-only: it never decides step completion.
 	local objectiveTarget: any = nil
@@ -95,26 +98,49 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		return best, bestDist
 	end
 
-	local function nearestEnemy(position: Vector3): (string?, string?, number?)
-		local bestId: string? = nil
-		local bestLabel: string? = nil
-		local bestDist: number? = nil
+	local BOSS_DEFINITION_ID = "enemy_goblin_chieftain"
+	local BOSS_ENGAGE_RADIUS = 90
+
+	local function enemyName(defId: any, level: any): string
+		return (if defId == BOSS_DEFINITION_ID then "Goblin Chieftain" else "Goblin") .. (if level then " Lv" .. tostring(level) else "")
+	end
+	-- Reads an enemy's presentation facts from the authoritative attributes World mirrors onto the model.
+	-- The client only READS these; it never computes, predicts, or writes enemy health.
+	local function enemyInfo(model: Instance): any
+		return {
+			RuntimeId = model:GetAttribute("EnemyRuntimeId"),
+			DefinitionId = model:GetAttribute("EnemyDefinitionId"),
+			Level = model:GetAttribute("EnemyLevel"),
+			Health = model:GetAttribute("EnemyHealth"),
+			MaxHealth = model:GetAttribute("EnemyMaxHealth"),
+			Model = model,
+		}
+	end
+
+	-- One pass over alive enemy models: the nearest overall is the current soft-target; the nearest alive
+	-- Chieftain within engage range is the boss. Returns both (either may be nil).
+	local function scanCombat(position: Vector3): (any?, any?)
+		local target: any = nil
+		local targetDist: number? = nil
+		local boss: any = nil
+		local bossDist: number? = nil
 		for _, model in CollectionService:GetTagged(ENEMY_TAG) do
 			if model:IsA("Model") and model:IsDescendantOf(workspace) and model:GetAttribute("EnemyAlive") ~= false then
 				local runtimeId = model:GetAttribute("EnemyRuntimeId")
 				if type(runtimeId) == "string" and runtimeId ~= "" then
 					local d = (position - model:GetPivot().Position).Magnitude
-					if d <= TARGET_RADIUS and (bestDist == nil or d < bestDist) then
-						bestId = runtimeId
-						local defId = model:GetAttribute("EnemyDefinitionId")
-						local level = model:GetAttribute("EnemyLevel")
-						bestLabel = (if defId == "enemy_goblin_chieftain" then "Goblin Chieftain" else "Goblin") .. (if level then " Lv" .. tostring(level) else "")
-						bestDist = d
+					if d <= TARGET_RADIUS and (targetDist == nil or d < targetDist) then
+						target = enemyInfo(model)
+						targetDist = d
+					end
+					if model:GetAttribute("EnemyDefinitionId") == BOSS_DEFINITION_ID and d <= BOSS_ENGAGE_RADIUS and (bossDist == nil or d < bossDist) then
+						boss = enemyInfo(model)
+						bossDist = d
 					end
 				end
 			end
 		end
-		return bestId, bestLabel, bestDist
+		return target, boss
 	end
 
 	-- ===== Objective guidance highlight (presentation-only) =====
@@ -131,6 +157,18 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	guidanceHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	guidanceHighlight.Enabled = false
 	guidanceHighlight.Parent = workspace
+
+	-- Distinct combat-target indicator (warm tint) so it never fights the cool objective-guidance
+	-- highlight over the same presentation object; when both would pick the same model, guidance yields.
+	local targetHighlight = Instance.new("Highlight")
+	targetHighlight.Name = "AR_CombatTarget"
+	targetHighlight.FillColor = Color3.fromRGB(255, 120, 120)
+	targetHighlight.FillTransparency = 0.85
+	targetHighlight.OutlineColor = Color3.fromRGB(255, 165, 165)
+	targetHighlight.OutlineTransparency = 0
+	targetHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	targetHighlight.Enabled = false
+	targetHighlight.Parent = workspace
 
 	local function adorneeFor(inst: Instance): Instance?
 		local visual = inst:FindFirstChild("Visual")
@@ -177,6 +215,11 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 				end
 			end
 		end
+		-- Coexist with the combat-target indicator: if the objective would highlight the very model the
+		-- player is currently targeting, let the (warm) combat indicator own it -- no double outline.
+		if best ~= nil and best == currentTargetModel then
+			best = nil
+		end
 		local adornee = if best then adorneeFor(best) else nil
 		guidanceHighlight.Adornee = adornee
 		guidanceHighlight.Enabled = adornee ~= nil
@@ -191,6 +234,11 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		local position = rootPosition()
 		if not position then
 			iface.SetContext({ TrainingActive = trainingActive, MiningActive = miningActive })
+			currentTarget = nil
+			currentTargetModel = nil
+			iface.SetCombat(nil)
+			targetHighlight.Adornee = nil
+			targetHighlight.Enabled = false
 			updateGuidance(nil)
 			return
 		end
@@ -199,9 +247,17 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		local forge = nearestTagged(FORGE_TAG, position, INTERACT_RADIUS)
 		currentStationId = if station then station:GetAttribute("StationId") else nil
 
-		local targetId, targetLabel = nearestEnemy(position)
-		currentTarget = targetId
-		currentTargetLabel = targetLabel
+		-- Soft-target + boss scan, and the authoritative-health readouts + combat-target indicator.
+		local target, boss = scanCombat(position)
+		currentTarget = if target then target.RuntimeId else nil
+		currentTargetLabel = if target then enemyName(target.DefinitionId, target.Level) else nil
+		currentTargetModel = if target then target.Model else nil
+		iface.SetCombat({
+			Target = if target then { Name = enemyName(target.DefinitionId, target.Level), Level = target.Level, Health = target.Health, MaxHealth = target.MaxHealth } else nil,
+			Boss = if boss then { Name = "Goblin Chieftain", Level = boss.Level, Health = boss.Health, MaxHealth = boss.MaxHealth } else nil,
+		})
+		targetHighlight.Adornee = currentTargetModel
+		targetHighlight.Enabled = currentTargetModel ~= nil
 
 		iface.SetContext({
 			NearStationId = currentStationId,
