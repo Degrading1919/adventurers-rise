@@ -17,6 +17,7 @@ export type StationState = {
 	Tier: number,
 	XPPerSecond: number,
 	NextUpgradeCostGold: number?,
+	NextXPPerSecond: number?,
 }
 
 local Service = { MaximumElapsedSeconds = 60 }
@@ -85,6 +86,9 @@ function Service.New(playerData: PlayerData, skills: Skills)
 			Tier = tier.Tier,
 			XPPerSecond = tier.XPPerSecond,
 			NextUpgradeCostGold = if nextTier then nextTier.UpgradeCostGold else nil,
+			-- The next tier's training rate (nil at max tier), so the client can present the upgrade
+			-- benefit without duplicating station balance data.
+			NextXPPerSecond = if nextTier then nextTier.XPPerSecond else nil,
 		}, nil
 	end
 
@@ -159,6 +163,7 @@ function Service.New(playerData: PlayerData, skills: Skills)
 				Tier = nextTier.Tier,
 				XPPerSecond = nextTier.XPPerSecond,
 				NextUpgradeCostGold = if definition.Tiers[nextTier.Tier + 1] then definition.Tiers[nextTier.Tier + 1].UpgradeCostGold else nil,
+				NextXPPerSecond = if definition.Tiers[nextTier.Tier + 1] then definition.Tiers[nextTier.Tier + 1].XPPerSecond else nil,
 			}
 		end)
 		if not ok then

@@ -66,6 +66,7 @@ export type WorldAdapters = {
 	read GatheringNodeResolver: (number, string) -> (any?, string?),
 	read StationDistanceProvider: (number, string) -> (number?, string?),
 	read ForgeDistanceProvider: (number) -> (number?, string?),
+	read ShopDistanceProvider: (number, string) -> (number?, string?),
 }
 export type RequestResult = {
 	Ok: boolean,
@@ -141,7 +142,8 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			and type(worldAdapters.CombatDistanceProvider) == "function"
 			and type(worldAdapters.GatheringNodeResolver) == "function"
 			and type(worldAdapters.StationDistanceProvider) == "function"
-			and type(worldAdapters.ForgeDistanceProvider) == "function",
+			and type(worldAdapters.ForgeDistanceProvider) == "function"
+			and type(worldAdapters.ShopDistanceProvider) == "function",
 		"Composition requires injected world adapters"
 	)
 
@@ -165,6 +167,19 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		end
 		if distance > INTERACTION_RANGE_STUDS then
 			return false, "TooFarFromForge"
+		end
+		return true, nil
+	end
+	-- Server-authoritative Shop proximity: every buy/sell through a catalog requires the player to be
+	-- physically near the AR_Shop instance whose stable ShopId matches that catalog. The client's own
+	-- proximity only opens the panel for convenience; this is the check the transaction actually trusts.
+	local function nearShop(userId: number, shopId: string): (boolean, string?)
+		local distance, reason = worldAdapters.ShopDistanceProvider(userId, shopId)
+		if type(distance) ~= "number" then
+			return false, reason or "ShopNotReachable"
+		end
+		if distance > INTERACTION_RANGE_STUDS then
+			return false, "TooFarFromShop"
 		end
 		return true, nil
 	end
@@ -398,11 +413,19 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		if type(payload) ~= "table" or type(payload.CatalogId) ~= "string" or type(payload.DefinitionId) ~= "string" or type(payload.Amount) ~= "number" then
 			return nil, "MalformedPayload"
 		end
+		local near, nearReason = nearShop(userId, payload.CatalogId)
+		if not near then
+			return nil, nearReason
+		end
 		return economy.PurchaseStack(userId, payload.CatalogId, payload.DefinitionId, payload.Amount)
 	end
 	handlers[RequestIds.EconomySellStack] = function(userId: number, payload: any): (any?, string?)
 		if type(payload) ~= "table" or type(payload.CatalogId) ~= "string" or type(payload.DefinitionId) ~= "string" or type(payload.Amount) ~= "number" then
 			return nil, "MalformedPayload"
+		end
+		local near, nearReason = nearShop(userId, payload.CatalogId)
+		if not near then
+			return nil, nearReason
 		end
 		return economy.SellStack(userId, payload.CatalogId, payload.DefinitionId, payload.Amount)
 	end
@@ -410,11 +433,19 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		if type(payload) ~= "table" or type(payload.CatalogId) ~= "string" or type(payload.DefinitionId) ~= "string" then
 			return nil, "MalformedPayload"
 		end
+		local near, nearReason = nearShop(userId, payload.CatalogId)
+		if not near then
+			return nil, nearReason
+		end
 		return economy.PurchaseDiscrete(userId, payload.CatalogId, payload.DefinitionId)
 	end
 	handlers[RequestIds.EconomySellDiscrete] = function(userId: number, payload: any): (any?, string?)
 		if type(payload) ~= "table" or type(payload.CatalogId) ~= "string" or type(payload.InstanceId) ~= "string" then
 			return nil, "MalformedPayload"
+		end
+		local near, nearReason = nearShop(userId, payload.CatalogId)
+		if not near then
+			return nil, nearReason
 		end
 		return economy.SellDiscrete(userId, payload.CatalogId, payload.InstanceId)
 	end

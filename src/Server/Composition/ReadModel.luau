@@ -6,6 +6,7 @@ local AscensionIds = require(Shared.AscensionIds)
 local StationDefinitions = require(script.Parent.Parent.Plots.StationDefinitions)
 local ShopCatalog = require(script.Parent.Parent.Economy.ShopCatalog)
 local CraftingDefinitions = require(script.Parent.Parent.Crafting.Definitions)
+local GatheringDefinitions = require(script.Parent.Parent.Gathering.Definitions)
 
 -- The one hub shop for the vertical slice. Its prices live server-side (ShopCatalog); the client needs
 -- them only to present buy/sell options, so a sanitized copy is surfaced here rather than duplicated
@@ -183,6 +184,23 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			return (a.RecipeId :: string) < (b.RecipeId :: string)
 		end)
 
+		-- Sanitized gathering-node requirements the node info panel presents (name, required Mining
+		-- level, output, skill), sorted for a stable order. Server-owned definition data surfaced for
+		-- presentation only; eligibility, rates, tool validation, and rewards stay server-authoritative.
+		local gatheringNodes: { any } = {}
+		for _, node in GatheringDefinitions.ById do
+			table.insert(gatheringNodes, {
+				NodeId = node.Id,
+				DisplayName = node.DisplayName,
+				OutputItemId = node.OutputItemId,
+				SkillId = node.SkillId,
+				RequiredMiningLevel = node.RequiredMiningLevel,
+			})
+		end
+		table.sort(gatheringNodes, function(a, b): boolean
+			return (a.NodeId :: string) < (b.NodeId :: string)
+		end)
+
 		return {
 			Gold = gold,
 			Skills = skills,
@@ -197,6 +215,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			Health = health,
 			Shop = shop,
 			Recipes = recipes,
+			GatheringNodes = gatheringNodes,
 			Onboarding = onboarding,
 			OfflineFocusSkillId = focusSkillId,
 			-- Retained only for the current session (composition clears it on disconnect); copied
