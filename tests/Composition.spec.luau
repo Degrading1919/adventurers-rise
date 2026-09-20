@@ -1558,4 +1558,34 @@ test("onboarding: a failed Iron Bar craft does not complete Smelt Bar", function
 	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
 end)
 
+test("feedback: the read model exposes authoritative skill progression fields (level, XP, next-level, cap)", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	setSkillLevel(f, 7, SkillIds.Melee, 2)
+	local state = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	local melee = state.Skills[SkillIds.Melee]
+	-- The client presents exactly these authoritative values (it never recomputes levels/thresholds).
+	local authoritative = assert(f.Composition.Services.Skills.GetState(7, SkillIds.Melee))
+	equal(melee.Level, authoritative.Level)
+	equal(melee.XP, authoritative.XP)
+	equal(melee.XPAtLevel, authoritative.XPAtLevel)
+	equal(melee.XPForNextLevel, authoritative.XPForNextLevel)
+	assert(melee.XPForNextLevel ~= nil, "a non-capped skill exposes the next-level threshold for progress display")
+	-- Mastery EarnedPoints is exposed so a newly earned point is detectable by diffing snapshots.
+	assert(type(state.Mastery[SkillIds.Melee].EarnedPoints) == "number")
+end)
+
+test("feedback: reading state never awards progression -- repeated reads leave XP, Gold, and Mastery points unchanged", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	setSkillLevel(f, 7, SkillIds.Melee, 3)
+	local first = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	f.Advance(1)
+	local second = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	equal(second.Skills[SkillIds.Melee].XP, first.Skills[SkillIds.Melee].XP)
+	equal(second.Skills[SkillIds.Melee].Level, first.Skills[SkillIds.Melee].Level)
+	equal(second.Gold, first.Gold)
+	equal(second.Mastery[SkillIds.Melee].EarnedPoints, first.Mastery[SkillIds.Melee].EarnedPoints)
+end)
+
 print(("%d Composition checks passed"):format(passed))

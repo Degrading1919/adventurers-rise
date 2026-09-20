@@ -299,4 +299,171 @@ test("provocation state is cleared the instant an enemy dies, before its respawn
 	equal(#calls.remove, 0)
 end)
 
+-- ===== Enemy health presentation (sanitizer + mirror) =====
+test("SanitizeEnemyHealth mirrors an alive enemy's authoritative current/max health", function()
+	local h = World.SanitizeEnemyHealth({ Alive = true, Health = 20, MaxHealth = 48 })
+	equal(h.Health, 20)
+	equal(h.MaxHealth, 48)
+end)
+
+test("SanitizeEnemyHealth never presents positive health for a dead enemy", function()
+	local h = World.SanitizeEnemyHealth({ Alive = false, Health = 48, MaxHealth = 48 })
+	equal(h.Health, 0)
+	equal(h.MaxHealth, 48)
+end)
+
+test("SanitizeEnemyHealth clamps overkill/invalid current health into [0, MaxHealth]", function()
+	equal(World.SanitizeEnemyHealth({ Alive = true, Health = -5, MaxHealth = 30 }).Health, 0)
+	equal(World.SanitizeEnemyHealth({ Alive = true, Health = 999, MaxHealth = 30 }).Health, 30)
+	equal(World.SanitizeEnemyHealth({ Alive = true, MaxHealth = 30 }).Health, 0)
+	local noMax = World.SanitizeEnemyHealth({ Alive = true, Health = 10 })
+	equal(noMax.MaxHealth, 0)
+	equal(noMax.Health, 0)
+end)
+
+test("SanitizeEnemyHealth is definition-agnostic and never mutates its input (one authority for normal and boss)", function()
+	local goblin = { Alive = true, Health = 20, MaxHealth = 48 }
+	local chieftain = { Alive = true, Health = 200, MaxHealth = 400 }
+	equal(World.SanitizeEnemyHealth(goblin).Health, 20)
+	equal(World.SanitizeEnemyHealth(chieftain).Health, 200)
+	equal(goblin.Health, 20)
+	equal(chieftain.Health, 200)
+end)
+
+local function makeHealthEnemies(createState, snapshotState, calls)
+	return {
+		Create = function()
+			table.insert(calls.create, true)
+			return createState, nil
+		end,
+		GetSnapshot = function()
+			return snapshotState
+		end,
+		Remove = function()
+			table.insert(calls.remove, true)
+		end,
+	}
+end
+
+test("World mirrors the authoritative current/max health onto the bound model, read-only", function()
+	local runtime, calls = makeEnv()
+	calls.create = {}
+	local service = World.New(runtime)
+	local ok, err = pcall(function()
+		service.Start(
+			makeHealthEnemies(
+				{ RuntimeId = RUNTIME_ID, Level = 3, DefinitionId = "enemy_goblin", MaxHealth = 48, Health = 48, Alive = true },
+				{ Alive = true, RuntimeId = RUNTIME_ID, Health = 20, MaxHealth = 48 },
+				calls
+			),
+			makeResolver(calls)
+		)
+	end)
+	assert(not ok and tostring(err):find("__stop__") ~= nil, "expected the stubbed loop halt, got: " .. tostring(err))
+	local described = service.DescribeEnemies()
+	equal(#described, 1)
+	equal(described[1].MaxHealth, 48)
+	-- Synced from the (damaged) authoritative snapshot -- the client never computes this.
+	equal(described[1].Health, 20)
+	equal(described[1].Alive, true)
+	-- The presentation sync only READ the snapshot: the enemy was created once and never retired/mutated.
+	equal(#calls.create, 1)
+	equal(#calls.remove, 0)
+end)
+
+test("a dead authoritative snapshot forces the mirrored health to zero regardless of its reported value", function()
+	local runtime, calls = makeEnv()
+	calls.create = {}
+	local service = World.New(runtime)
+	local ok = pcall(function()
+		service.Start(
+			makeHealthEnemies(
+				{ RuntimeId = RUNTIME_ID, Level = 3, DefinitionId = "enemy_goblin", MaxHealth = 48, Health = 48, Alive = true },
+				{ Alive = false, RuntimeId = RUNTIME_ID, Health = 48, MaxHealth = 48 },
+				calls
+			),
+			makeResolver(calls)
+		)
+	end)
+	assert(not ok, "expected the stubbed loop halt")
+	local described = service.DescribeEnemies()
+	equal(described[1].Health, 0)
+	equal(described[1].Alive, false)
+end)
+
+test("respawn refreshes the mirrored max/current health and the RuntimeId from the fresh authoritative state", function()
+	local calls = { clearEnemy = {}, remove = {}, resolve = {}, create = {} }
+	local marker = newInstance("Part")
+	marker:SetAttribute("EnemyDefinitionId", "enemy_goblin")
+	marker.CFrame = makeCFrame()
+	local folder = newInstance("Folder")
+	local clockVal = 0
+	local waitCount = 0
+	local runtime = {
+		Players = {
+			__isInstance = true,
+			GetPlayers = function() return {} end,
+			GetPlayerByUserId = function() return nil end,
+			PlayerAdded = { Connect = function() return { Disconnect = function() end } end },
+		},
+		Workspace = { __isInstance = true, FindFirstChild = function() return folder end },
+		Collection = {
+			__isInstance = true,
+			GetTagged = function(_, tag)
+				if tag == "AR_EnemySpawn" then
+					return { marker }
+				end
+				return {}
+			end,
+			AddTag = function() end,
+		},
+		Clock = function() return clockVal end,
+		Warn = function() end,
+		Spawn = function(fn, ...) fn(...) end,
+		-- Advance the clock each tick so the 5s respawn timer is reached, then halt after a few polls.
+		Wait = function()
+			waitCount += 1
+			clockVal += 3
+			if waitCount >= 4 then
+				error("__stop__", 0)
+			end
+		end,
+	}
+	local createCount = 0
+	local enemies = {
+		Create = function()
+			createCount += 1
+			table.insert(calls.create, true)
+			if createCount == 1 then
+				return { RuntimeId = "rid-1", Level = 3, DefinitionId = "enemy_goblin", MaxHealth = 48, Health = 48, Alive = true }, nil
+			end
+			return { RuntimeId = "rid-2", Level = 8, DefinitionId = "enemy_goblin", MaxHealth = 78, Health = 78, Alive = true }, nil
+		end,
+		GetSnapshot = function(rid)
+			if rid == "rid-1" then
+				return { Alive = false, RuntimeId = "rid-1" }
+			end
+			return { Alive = true, RuntimeId = rid, Health = 78, MaxHealth = 78 }
+		end,
+		Remove = function(rid) table.insert(calls.remove, rid) end,
+	}
+	local resolver = {
+		ResolveAttack = function() return nil, "NotEngaged" end,
+		OnSpawn = function() end,
+		ClearEnemy = function(rid) table.insert(calls.clearEnemy, rid) end,
+	}
+	local service = World.New(runtime)
+	local ok = pcall(function() service.Start(enemies, resolver) end)
+	assert(not ok, "expected the stubbed loop halt")
+	equal(createCount, 2)
+	local described = service.DescribeEnemies()
+	equal(#described, 1)
+	equal(described[1].RuntimeId, "rid-2")
+	equal(described[1].Health, 78)
+	equal(described[1].MaxHealth, 78)
+	equal(described[1].Alive, true)
+	equal(#calls.remove, 1)
+	equal(calls.remove[1], "rid-1")
+end)
+
 print(("%d World checks passed"):format(passed))
