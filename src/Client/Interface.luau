@@ -23,7 +23,7 @@ local SKILL_ORDER = { SkillIds.Melee, SkillIds.Defense, SkillIds.Mining, SkillId
 local ITEM_LABELS: { [string]: string } = {
 	item_iron_ore = "Iron Ore",
 	item_iron_bar = "Iron Bar",
-	item_chieftain_fang = "Chieftain Fang",
+	item_chieftain_fang = "Goblin Chieftain Fang",
 	weapon_sword_starter = "Starter Sword",
 	weapon_sword_upgraded = "Upgraded Sword",
 	tool_pickaxe_basic = "Basic Pickaxe",
@@ -32,6 +32,11 @@ local ITEM_LABELS: { [string]: string } = {
 local function itemLabel(id: string): string
 	return ITEM_LABELS[id] or id
 end
+-- Presentation-only rarity: special boss loot is badged/coloured so it never reads like a routine
+-- resource. The item IDs and their authority stay server-owned; this only changes how they look.
+local RARE_ITEMS: { [string]: boolean } = {
+	item_chieftain_fang = true,
+}
 
 local COLORS = {
 	Panel = Color3.fromRGB(28, 30, 38),
@@ -43,6 +48,10 @@ local COLORS = {
 	Dim = Color3.fromRGB(170, 175, 185),
 	Button = Color3.fromRGB(55, 60, 74),
 	ButtonOn = Color3.fromRGB(70, 120, 90),
+	-- A disabled/unavailable control tint (kept as one token instead of repeated literals).
+	Disabled = Color3.fromRGB(45, 47, 55),
+	-- Rare/special-loot accent (warm gold), distinct from the routine blue/green feedback colours.
+	Rare = Color3.fromRGB(224, 178, 92),
 }
 
 local function make(class: string, props: { [string]: any }, parent: Instance?): any
@@ -54,6 +63,16 @@ local function make(class: string, props: { [string]: any }, parent: Instance?):
 		inst.Parent = parent
 	end
 	return inst
+end
+
+-- Mobile-safe width: a surface fills the available width (its Size should use a Scale width minus a
+-- side margin) but is capped at a comfortable desktop maximum, so wide HUD elements never overflow a
+-- narrow phone yet never stretch awkwardly on desktop. optionalMinHeight caps the height similarly.
+local function capSize(inst: Instance, maxWidth: number, maxHeight: number?, minWidth: number?, minHeight: number?)
+	make("UISizeConstraint", {
+		MaxSize = Vector2.new(maxWidth, if maxHeight then maxHeight else math.huge),
+		MinSize = Vector2.new(if minWidth then minWidth else 0, if minHeight then minHeight else 0),
+	}, inst)
 end
 
 local Interface = {}
@@ -125,11 +144,13 @@ function Interface.New(player: Player)
 
 	-- ===== Status line (top-center) =====
 	local status = make("TextLabel", {
-		Size = UDim2.new(0, 460, 0, 30), Position = UDim2.new(0.5, 0, 0, 12),
+		Size = UDim2.new(1, -20, 0, 30), Position = UDim2.new(0.5, 0, 0, 12),
 		AnchorPoint = Vector2.new(0.5, 0), BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.25,
 		Font = Enum.Font.Gotham, TextSize = 15, TextColor3 = COLORS.Text, Text = "Welcome to Adventurer's Rise",
+		TextTruncate = Enum.TextTruncate.AtEnd,
 	}, screen)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, status)
+	capSize(status, 460)
 
 	local function setStatus(text: string)
 		status.Text = text
@@ -139,10 +160,11 @@ function Interface.New(player: Player)
 	-- Simulator-style single line, not a quest log. Tappable so the starter-focus step can reopen its
 	-- framing panel. All completion is server-authoritative; this only presents the derived step.
 	local objective = make("TextButton", {
-		Size = UDim2.new(0, 460, 0, 46), Position = UDim2.new(0.5, 0, 0, 48), AnchorPoint = Vector2.new(0.5, 0),
+		Size = UDim2.new(1, -20, 0, 46), Position = UDim2.new(0.5, 0, 0, 48), AnchorPoint = Vector2.new(0.5, 0),
 		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.15, AutoButtonColor = false, Text = "", Visible = false,
 	}, screen)
 	make("UICorner", { CornerRadius = UDim.new(0, 8) }, objective)
+	capSize(objective, 460)
 	make("UIStroke", { Color = COLORS.Accent, Thickness = 1.5, Transparency = 0.35 }, objective)
 	make("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, objective)
 	local objectiveTitle = make("TextLabel", {
@@ -156,12 +178,13 @@ function Interface.New(player: Player)
 
 	-- ===== Toast (temporary, center): provisional presentation for pushed reward outcomes =====
 	local toast = make("TextLabel", {
-		Size = UDim2.new(0, 340, 0, 96), Position = UDim2.new(0.5, 0, 0.34, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.new(1, -40, 0, 96), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.08, Visible = false,
 		Font = Enum.Font.GothamMedium, TextSize = 16, TextColor3 = COLORS.Text, TextWrapped = true,
 		Text = "",
 	}, screen)
 	make("UICorner", { CornerRadius = UDim.new(0, 10) }, toast)
+	capSize(toast, 360)
 	make("UIStroke", { Color = COLORS.Accent, Thickness = 2, Transparency = 0.2 }, toast)
 	make("UIPadding", {
 		PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
@@ -221,10 +244,11 @@ function Interface.New(player: Player)
 
 	-- ===== Boss health bar (top-center): prominent shared-encounter presentation =====
 	local bossBar = make("Frame", {
-		Size = UDim2.new(0, 440, 0, 46), Position = UDim2.new(0.5, 0, 0, 104), AnchorPoint = Vector2.new(0.5, 0),
+		Size = UDim2.new(1, -20, 0, 46), Position = UDim2.new(0.5, 0, 0, 104), AnchorPoint = Vector2.new(0.5, 0),
 		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.1, Visible = false,
 	}, screen)
 	make("UICorner", { CornerRadius = UDim.new(0, 8) }, bossBar)
+	capSize(bossBar, 440)
 	make("UIStroke", { Color = COLORS.Bad, Thickness = 2, Transparency = 0.15 }, bossBar)
 	make("UIPadding", { PaddingTop = UDim.new(0, 5), PaddingBottom = UDim.new(0, 5), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, bossBar)
 	local bossName = make("TextLabel", {
@@ -277,23 +301,34 @@ function Interface.New(player: Player)
 		return b
 	end
 
+	-- Primary moment-to-moment action, always present.
 	local attackBtn = button("Attack (hold)", 1)
+	-- World-contextual actions: shown only when the player is actually at the relevant world object
+	-- (SetContext toggles their visibility), so the bar isn't crowded with impossible actions. Attack
+	-- stays; these appear/disappear as you approach a node, station, forge, or shop.
 	local mineBtn = button("Mine", 2)
 	local trainBtn = button("Train", 3)
-	local forgeBtn = button("Forge", 4)
-	local upgradeBtn = button("Upgrade", 5)
-	local gearBtn = button("Gear", 6)
-	local shopBtn = button("Shop", 7)
-	local skillsBtn = button("Skills", 8)
-	local ascendBtn = button("Ascend", 9)
-	local offlineBtn = button("Offline", 10)
+	local upgradeBtn = button("Upgrade", 4)
+	local forgeBtn = button("Forge", 5)
+	local shopBtn = button("Shop", 6)
+	for _, b in { mineBtn, trainBtn, upgradeBtn, forgeBtn, shopBtn } do
+		b.Visible = false
+	end
+	-- One grouped entry for the progression/menu destinations (Gear, Skills, Ascend, Offline) so they
+	-- don't each occupy a permanent bar slot. It badges any spendable Mastery Points.
+	local menuBtn = button("Menu", 20)
 
 	-- ===== Panels =====
 	local function panel(titleText: string, height: number?): (Frame, Frame)
+		local h = height or 300
+		-- Mobile-adaptive: fill most of the viewport (minus margins) but cap at a comfortable desktop
+		-- size, so a panel is never wider than the phone nor taller than a short (landscape) screen. The
+		-- scrolling content inside each panel absorbs any height reduction.
 		local root = make("Frame", {
-			Size = UDim2.new(0, 360, 0, height or 300), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+			Size = UDim2.new(1, -24, 1, -120), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
 			BackgroundColor3 = COLORS.Panel, Visible = false,
 		}, screen)
+		capSize(root, 360, h, 268, math.min(h, 220))
 		make("UICorner", { CornerRadius = UDim.new(0, 10) }, root)
 		make("UIPadding", { PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10), PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, root)
 		make("TextLabel", {
@@ -316,7 +351,7 @@ function Interface.New(player: Player)
 	local gearPanel, gearContent = panel("Gear — Inventory")
 	local ascendPanel, ascendContent = panel("Ascension — Adept")
 	local offlinePanel, offlineContent = panel("Offline Training")
-	local shopPanel, shopContent = panel("Shop — Hub", 340)
+	local shopPanel, shopContent = panel("Shop", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
 	local skillsPanel, skillsContent = panel("Skills — Progress", 320)
 	local starterPanel, starterContent = panel("Choose Your Focus", 300)
@@ -373,6 +408,9 @@ function Interface.New(player: Player)
 
 	-- Latest state cache so re-rendering a panel uses current data.
 	local lastState: any = nil
+	-- Combat has visual priority over the guided objective: while a boss bar is showing, the objective
+	-- line yields (hides) so the two top-center surfaces never compete. SetCombat drives this flag.
+	local bossActive = false
 
 	-- ---- Forge panel ----
 	-- Data-driven from the read-model Recipes (authoritative requirements) and current resources; the
@@ -512,20 +550,41 @@ function Interface.New(player: Player)
 				table.insert(resources, { DefinitionId = defId, Count = count })
 			end
 		end
+		-- Rare items sort to the top of Resources and are badged, so special boss loot never reads like a
+		-- routine stack. Presentation only; ownership/counts stay authoritative.
 		table.sort(resources, function(a, b): boolean
+			local ar, br = RARE_ITEMS[a.DefinitionId] == true, RARE_ITEMS[b.DefinitionId] == true
+			if ar ~= br then
+				return ar
+			end
 			return a.DefinitionId < b.DefinitionId
 		end)
 		if #resources == 0 then
 			gearNote("No resources yet.", order2); order2 += 1
 		end
 		for _, resource in resources do
-			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 30), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, gearList)
+			local isRare = RARE_ITEMS[resource.DefinitionId] == true
+			local row = make("Frame", {
+				Size = UDim2.new(1, -6, 0, 30), LayoutOrder = order2,
+				BackgroundColor3 = if isRare then Color3.fromRGB(52, 45, 28) else COLORS.PanelAlt,
+			}, gearList)
 			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			if isRare then
+				make("UIStroke", { Color = COLORS.Rare, Thickness = 1.5, Transparency = 0.15 }, row)
+			end
 			make("TextLabel", {
-				Size = UDim2.new(1, -16, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
-				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
+				Size = UDim2.new(1, if isRare then -64 else -16, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
+				Font = if isRare then Enum.Font.GothamMedium else Enum.Font.Gotham, TextSize = 14,
+				TextColor3 = if isRare then COLORS.Rare else COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
 				Text = ("%s   x%d"):format(itemLabel(resource.DefinitionId), resource.Count),
 			}, row)
+			if isRare then
+				local badge = make("TextLabel", {
+					Size = UDim2.new(0, 46, 0, 20), Position = UDim2.new(1, -52, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
+					BackgroundColor3 = COLORS.Rare, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.fromRGB(30, 24, 10), Text = "RARE",
+				}, row)
+				make("UICorner", { CornerRadius = UDim.new(0, 4) }, badge)
+			end
 			order2 += 1
 		end
 	end
@@ -876,8 +935,15 @@ function Interface.New(player: Player)
 		renderMastery()
 		masteryPanel.Visible = true
 	end
+	-- One-line framing so the skill → XP → Mastery relationship reads at a glance: train a skill to earn
+	-- levels, each level grants a Mastery Point, spend them in that skill's tree via the "Mastery" button.
+	make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12,
+		TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true, Text = "Level up a skill to earn Mastery Points, then spend them in its tree.",
+	}, skillsContent)
 	local skillsList = make("ScrollingFrame", {
-		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ScrollBarThickness = 4,
+		Size = UDim2.new(1, 0, 1, -32), Position = UDim2.new(0, 0, 0, 32), BackgroundTransparency = 1, ScrollBarThickness = 4,
 		CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	}, skillsContent)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, skillsList)
@@ -962,11 +1028,13 @@ function Interface.New(player: Player)
 			local amount = if type(payload.CommonItemAmount) == "number" then payload.CommonItemAmount else 1
 			table.insert(lines, ("%dx %s"):format(amount, itemLabel(payload.CommonItemDefinitionId)))
 		end
-		if type(payload.RareItemDefinitionId) == "string" then
+		-- A rare drop gets the warm gold accent (not the routine green), so it clearly reads as special.
+		local gotRare = type(payload.RareItemDefinitionId) == "string"
+		if gotRare then
 			local amount = if type(payload.RareItemAmount) == "number" then payload.RareItemAmount else 1
-			table.insert(lines, ("RARE! %dx %s"):format(amount, itemLabel(payload.RareItemDefinitionId)))
+			table.insert(lines, ("★ RARE  —  %dx %s"):format(amount, itemLabel(payload.RareItemDefinitionId)))
 		end
-		showToast(table.concat(lines, "\n"), COLORS.Good)
+		showToast(table.concat(lines, "\n"), if gotRare then COLORS.Rare else COLORS.Good)
 	end
 
 	-- Renders the compact current-objective surface from the sanitized authoritative Onboarding view and
@@ -988,7 +1056,8 @@ function Interface.New(player: Player)
 			lastObjectiveStepId = "__complete__"
 			return
 		end
-		objective.Visible = true
+		-- Yields to the boss bar so the two top-center surfaces never compete for attention.
+		objective.Visible = not bossActive
 		local progressText = ""
 		local progress = ob.Progress
 		if type(progress) == "table" and type(progress.Current) == "number" and type(progress.Required) == "number" then
@@ -1026,12 +1095,21 @@ function Interface.New(player: Player)
 			targetPanel.Visible = false
 		end
 		local boss = if type(ctx) == "table" then ctx.Boss else nil
-		if type(boss) == "table" then
+		local bossShown = type(boss) == "table"
+		if bossShown then
 			bossName.Text = tostring(boss.Name)
 			setHealthBar(bossFill, bossHealthText, boss.Health, boss.MaxHealth)
 			bossBar.Visible = true
 		else
 			bossBar.Visible = false
+		end
+		-- When the boss bar appears/disappears, re-apply the objective's visibility so it yields to (and
+		-- returns after) the boss encounter.
+		if bossShown ~= bossActive then
+			bossActive = bossShown
+			if type(lastState) == "table" then
+				renderObjective(lastState)
+			end
 		end
 	end
 
@@ -1117,6 +1195,18 @@ function Interface.New(player: Player)
 				end
 			end
 		end
+		-- Spendable Mastery Points across all skills, surfaced on the Menu button and Skills entry so the
+		-- skill → XP → points → tree relationship is visible without opening a panel.
+		local totalAvailable = 0
+		if type(state.Mastery) == "table" then
+			for _, skillId in SKILL_ORDER do
+				local m = state.Mastery[skillId]
+				if type(m) == "table" and type(m.AvailablePoints) == "number" then
+					totalAvailable += m.AvailablePoints
+				end
+			end
+		end
+		iface.SetMasteryBadge(totalAvailable)
 		if forgePanel.Visible then renderForge() end
 		if gearPanel.Visible then renderGear() end
 		if ascendPanel.Visible then renderAscend() end
@@ -1137,11 +1227,12 @@ function Interface.New(player: Player)
 
 	-- ===== Contextual interaction info: one compact surface for the nearby station / node / forge / shop =====
 	local contextInfo = make("Frame", {
-		Size = UDim2.new(0, 320, 0, 40), Position = UDim2.new(0.5, 0, 1, -126), AnchorPoint = Vector2.new(0.5, 1),
+		Size = UDim2.new(1, -40, 0, 40), Position = UDim2.new(0.5, 0, 1, -126), AnchorPoint = Vector2.new(0.5, 1),
 		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.2, Visible = false,
 	}, screen)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, contextInfo)
 	make("UIStroke", { Color = COLORS.Accent, Thickness = 1, Transparency = 0.5 }, contextInfo)
+	capSize(contextInfo, 340)
 	make("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, contextInfo)
 	local contextTitle = make("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 13,
@@ -1212,8 +1303,12 @@ function Interface.New(player: Player)
 	-- ctx: { NearStationId: string?, NearNode: boolean, NearForge: boolean, NearShop: boolean,
 	--        UpgradeCost: number?, TrainingActive: boolean?, MiningActive: boolean? }
 	function iface.SetContext(ctx: any)
+		-- World-contextual buttons are shown only where the action is actually possible (or in progress),
+		-- so the bar never carries permanently prominent buttons for actions the player can't do here.
+		-- The server still owns proximity authority; hiding a button is presentation only.
 		local nearStation = ctx.NearStationId ~= nil
 		local trainUsable = nearStation or ctx.TrainingActive == true
+		trainBtn.Visible = trainUsable
 		trainBtn.Active = trainUsable
 		trainBtn.AutoButtonColor = trainUsable
 		-- Name the trained skill so the player knows Melee vs Defense, not a generic Train.
@@ -1222,21 +1317,24 @@ function Interface.New(player: Player)
 			stationSkillLabel = SKILL_LABELS[lastState.PlotStations[ctx.NearStationId].SkillId]
 		end
 		trainBtn.Text = if ctx.TrainingActive then "Stop Train" elseif stationSkillLabel then ("Train %s"):format(stationSkillLabel) else "Train"
-		trainBtn.BackgroundColor3 = if ctx.TrainingActive then COLORS.ButtonOn elseif nearStation then COLORS.Button else Color3.fromRGB(45, 47, 55)
+		trainBtn.BackgroundColor3 = if ctx.TrainingActive then COLORS.ButtonOn elseif nearStation then COLORS.Button else COLORS.Disabled
+		upgradeBtn.Visible = nearStation
 		upgradeBtn.Active = nearStation
 		upgradeBtn.AutoButtonColor = nearStation
 		upgradeBtn.Text = if nearStation and ctx.UpgradeCost then ("Upgrade (%d g)"):format(ctx.UpgradeCost) else "Upgrade"
 
 		local mineUsable = ctx.NearNode == true or ctx.MiningActive == true
+		mineBtn.Visible = mineUsable
 		mineBtn.Active = mineUsable
 		mineBtn.AutoButtonColor = mineUsable
 		mineBtn.Text = if ctx.MiningActive then "Stop Mine" else "Mine"
-		mineBtn.BackgroundColor3 = if ctx.MiningActive then COLORS.ButtonOn elseif ctx.NearNode then COLORS.Button else Color3.fromRGB(45, 47, 55)
+		mineBtn.BackgroundColor3 = if ctx.MiningActive then COLORS.ButtonOn elseif ctx.NearNode then COLORS.Button else COLORS.Disabled
 
 		local nearForge = ctx.NearForge == true
+		forgeBtn.Visible = nearForge
 		forgeBtn.Active = nearForge
 		forgeBtn.AutoButtonColor = nearForge
-		forgeBtn.BackgroundColor3 = if nearForge then COLORS.Button else Color3.fromRGB(45, 47, 55)
+		forgeBtn.BackgroundColor3 = if nearForge then COLORS.Button else COLORS.Disabled
 		-- Once the player walks away from the Forge, the panel/action must stop behaving as usable
 		-- (the server also rejects a far craft). Close it so the buttons can't be tapped from afar.
 		if not nearForge then
@@ -1246,9 +1344,10 @@ function Interface.New(player: Player)
 		-- Shop is a contextual world interaction, mirroring the Forge: usable only near the shop, and the
 		-- panel closes when the player walks away (the server rejects a far transaction regardless).
 		local nearShop = ctx.NearShop == true
+		shopBtn.Visible = nearShop
 		shopBtn.Active = nearShop
 		shopBtn.AutoButtonColor = nearShop
-		shopBtn.BackgroundColor3 = if nearShop then COLORS.Button else Color3.fromRGB(45, 47, 55)
+		shopBtn.BackgroundColor3 = if nearShop then COLORS.Button else COLORS.Disabled
 		if not nearShop then
 			shopPanel.Visible = false
 		end
@@ -1289,12 +1388,63 @@ function Interface.New(player: Player)
 	trainBtn.Activated:Connect(function() handlers.TrainToggle() end)
 	upgradeBtn.Activated:Connect(function() handlers.Upgrade() end)
 	forgeBtn.Activated:Connect(function() hideAllPanels(); renderForge(); forgePanel.Visible = true end)
-	gearBtn.Activated:Connect(function() hideAllPanels(); renderGear(); gearPanel.Visible = true end)
 	shopBtn.Activated:Connect(function() hideAllPanels(); renderShop(); shopPanel.Visible = true end)
-	-- The Skills button opens the compact progress surface; Mastery is reached from a skill row there.
-	skillsBtn.Activated:Connect(function() hideAllPanels(); renderSkills(); skillsPanel.Visible = true end)
-	ascendBtn.Activated:Connect(function() hideAllPanels(); renderAscend(); ascendPanel.Visible = true end)
-	offlineBtn.Activated:Connect(function() hideAllPanels(); renderOffline(); offlinePanel.Visible = true end)
+
+	-- ===== Progression menu (grouped destinations) =====
+	-- Gear, Skills, Ascend, and Offline live behind one "Menu" button instead of each holding a
+	-- permanent bar slot. This is a single flat popup, not a nested menu tree.
+	local menu = make("Frame", {
+		Size = UDim2.new(0, 176, 0, 0), Position = UDim2.new(1, -12, 1, -80), AnchorPoint = Vector2.new(1, 1),
+		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.05, Visible = false, AutomaticSize = Enum.AutomaticSize.Y,
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, menu)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 1, Transparency = 0.4 }, menu)
+	make("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, menu)
+	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, menu)
+
+	local function menuEntry(text: string, order2: number, open: () -> ()): TextButton
+		local b = make("TextButton", {
+			Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = COLORS.Button, AutoButtonColor = true,
+			Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = COLORS.Text, Text = text, LayoutOrder = order2,
+		}, menu)
+		make("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
+		b.Activated:Connect(function()
+			menu.Visible = false
+			hideAllPanels()
+			open()
+		end)
+		return b
+	end
+	menuEntry("Gear", 1, function() renderGear(); gearPanel.Visible = true end)
+	-- The Skills entry opens the compact progress surface; Mastery is reached from a skill row there.
+	local skillsMenuEntry = menuEntry("Skills", 2, function() renderSkills(); skillsPanel.Visible = true end)
+	menuEntry("Ascend", 3, function() renderAscend(); ascendPanel.Visible = true end)
+	menuEntry("Offline", 4, function() renderOffline(); offlinePanel.Visible = true end)
+
+	menuBtn.Activated:Connect(function()
+		if menu.Visible then
+			menu.Visible = false
+		else
+			hideAllPanels()
+			menu.Visible = true
+		end
+	end)
+
+	-- Reflects spendable Mastery Points onto the Menu button and its Skills entry, so the player can see
+	-- there's progression to spend without opening anything. Purely derived from authoritative state.
+	function iface.SetMasteryBadge(totalAvailable: number)
+		if totalAvailable > 0 then
+			menuBtn.Text = ("Menu (%d)"):format(totalAvailable)
+			menuBtn.BackgroundColor3 = COLORS.ButtonOn
+			skillsMenuEntry.Text = ("Skills (%d)"):format(totalAvailable)
+			skillsMenuEntry.BackgroundColor3 = COLORS.ButtonOn
+		else
+			menuBtn.Text = "Menu"
+			menuBtn.BackgroundColor3 = COLORS.Button
+			skillsMenuEntry.Text = "Skills"
+			skillsMenuEntry.BackgroundColor3 = COLORS.Button
+		end
+	end
 
 	return iface
 end
