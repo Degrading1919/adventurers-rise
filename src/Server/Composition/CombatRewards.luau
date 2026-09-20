@@ -21,13 +21,14 @@ export type Bosses = {
 
 local Service = {}
 
-function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> (), announceBossReward: (any) -> ())
+function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> (), announceBossReward: (any) -> (), onNormalEnemyDefeated: (number) -> ())
 	assert(type(combat) == "table" and type(combat.ResolveMeleeAttack) == "function", "CombatRewards requires Combat")
 	assert(type(enemies) == "table" and type(enemies.GetSnapshot) == "function" and type(enemies.ConsumeDeath) == "function", "CombatRewards requires Enemies")
 	assert(type(economy) == "table" and type(economy.CreditGold) == "function", "CombatRewards requires Economy")
 	assert(type(bosses) == "table" and type(bosses.ResolveBossDeath) == "function", "CombatRewards requires Bosses")
 	assert(type(warn) == "function", "CombatRewards requires a warn sink")
 	assert(type(announceBossReward) == "function", "CombatRewards requires a boss-reward announcer")
+	assert(type(onNormalEnemyDefeated) == "function", "CombatRewards requires a normal-enemy-defeated sink")
 
 	local coordinator = {}
 
@@ -61,6 +62,16 @@ function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses:
 				end
 			else
 				local death = enemies.ConsumeDeath(targetId)
+				if death then
+					-- This hit consumed a NORMAL enemy's death (exactly-once by construction), so record the
+					-- one-time onboarding "first Goblin defeated" milestone. Isolated in pcall and done before
+					-- the Gold credit so a defeat is recorded even if the (separate) payout path has an issue;
+					-- a transient failure just means the next defeat latches it.
+					local noted = pcall(onNormalEnemyDefeated, userId)
+					if not noted then
+						warn(("[CombatRewards] Onboarding goblin-defeat note failed for %d on %s"):format(userId, targetId))
+					end
+				end
 				if death and (death :: any).GoldReward and (death :: any).GoldReward > 0 then
 					local _, goldReason = economy.CreditGold(userId, (death :: any).GoldReward)
 					if goldReason then

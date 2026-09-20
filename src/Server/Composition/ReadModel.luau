@@ -27,6 +27,7 @@ export type Ascension = {
 }
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
 export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
+export type Onboarding = { read GetView: (number) -> (any?, string?) }
 
 export type Services = {
 	Economy: Economy,
@@ -38,6 +39,7 @@ export type Services = {
 	Ascension: Ascension,
 	OfflineTraining: OfflineTraining,
 	PlayerHealth: PlayerHealth,
+	Onboarding: Onboarding,
 }
 
 local SLICE_SKILL_IDS = { SkillIds.Melee, SkillIds.Defense, SkillIds.Mining, SkillIds.Smithing }
@@ -132,6 +134,13 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			return nil, healthReason
 		end
 
+		-- Sanitized onboarding view: the current guided step (title/hint/progress/target) or a completion
+		-- marker. The server derives completion authoritatively; raw progression flags never appear here.
+		local onboarding, onboardingReason = services.Onboarding.GetView(userId)
+		if not onboarding then
+			return nil, onboardingReason
+		end
+
 		-- Sanitized hub-shop catalog: only the item id and its (optional) buy/sell prices, sorted for a
 		-- stable order. Never the internal catalog structure. Prices are presentation only; every actual
 		-- purchase/sale re-validates the price and Gold server-side through the Economy requests.
@@ -188,6 +197,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			Health = health,
 			Shop = shop,
 			Recipes = recipes,
+			Onboarding = onboarding,
 			OfflineFocusSkillId = focusSkillId,
 			-- Retained only for the current session (composition clears it on disconnect); copied
 			-- here so a caller mutating the returned model can never affect what a later read sees.

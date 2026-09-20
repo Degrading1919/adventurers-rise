@@ -53,6 +53,8 @@ def main():
         "OfflineTrainingDefinitions": root / "src/Server/OfflineTraining/Definitions.luau",
         "OfflineTrainingService": root / "src/Server/OfflineTraining/Service.luau",
         "PlayerHealthService": root / "src/Server/PlayerHealth/Service.luau",
+        "OnboardingDefinitions": root / "src/Server/Onboarding/Definitions.luau",
+        "OnboardingService": root / "src/Server/Onboarding/Service.luau",
         "CompositionGatheringSessions": root / "src/Server/Composition/GatheringSessions.luau",
         "CompositionTrainingSessions": root / "src/Server/Composition/TrainingSessions.luau",
         "CompositionCombatRewards": root / "src/Server/Composition/CombatRewards.luau",
@@ -84,6 +86,7 @@ local scripts = {{
     MasteryService = {{ Parent = {{ Definitions = "MasteryDefinitions" }} }},
     OfflineTrainingDefinitions = {{ Parent = {{ Parent = {{ Plots = {{ StationDefinitions = "StationDefinitions" }} }} }} }},
     OfflineTrainingService = {{ Parent = {{ Definitions = "OfflineTrainingDefinitions" }} }},
+    OnboardingService = {{ Parent = {{ Definitions = "OnboardingDefinitions" }} }},
     PlayerDataMigrations = {{ Parent = {{ Schema = "PlayerDataSchema" }} }},
     PlayerDataStore = {{ Parent = {{ Schema = "PlayerDataSchema", Migrations = "PlayerDataMigrations" }} }},
     PlayerDataService = {{ Parent = {{ Schema = "PlayerDataSchema", Store = "PlayerDataStore" }} }},
@@ -113,6 +116,7 @@ local scripts = {{
                 Mastery = {{ Service = "MasteryService" }},
                 OfflineTraining = {{ Service = "OfflineTrainingService" }},
                 PlayerHealth = {{ Service = "PlayerHealthService" }},
+                Onboarding = {{ Service = "OnboardingService" }},
             }},
         }},
     }},
@@ -174,6 +178,8 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Parent.Plots.StationDefinitions)', 'require("./StationDefinitions")')
             elif name == "OfflineTrainingService":
                 source = source.replace('require(script.Parent.Definitions)', 'require("./OfflineTrainingDefinitions")')
+            elif name == "OnboardingService":
+                source = source.replace('require(script.Parent.Definitions)', 'require("./OnboardingDefinitions")')
             elif name == "PlayerDataMigrations":
                 source = source.replace('require(script.Parent.Schema)', 'require("./PlayerDataSchema")')
             elif name == "PlayerDataStore":
@@ -206,6 +212,7 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Parent.Mastery.Service)', 'require("./MasteryService")')
                 source = source.replace('require(script.Parent.Parent.OfflineTraining.Service)', 'require("./OfflineTrainingService")')
                 source = source.replace('require(script.Parent.Parent.PlayerHealth.Service)', 'require("./PlayerHealthService")')
+                source = source.replace('require(script.Parent.Parent.Onboarding.Service)', 'require("./OnboardingService")')
                 source = source.replace('require(script.Parent.GatheringSessions)', 'require("./CompositionGatheringSessions")')
                 source = source.replace('require(script.Parent.TrainingSessions)', 'require("./CompositionTrainingSessions")')
                 source = source.replace('require(script.Parent.CombatRewards)', 'require("./CompositionCombatRewards")')
