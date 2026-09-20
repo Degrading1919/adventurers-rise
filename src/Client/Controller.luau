@@ -32,7 +32,7 @@ local function reasonText(reason: any): string
 	return if type(reason) == "string" then reason else "Failed"
 end
 
-function Controller.New(player: Player, net: any, iface: any)
+function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: any?)
 	local controller = {}
 
 	local miningActive = false
@@ -56,6 +56,10 @@ function Controller.New(player: Player, net: any, iface: any)
 		local ok, result = net.Request(RequestIds.StateGet, nil)
 		if ok and type(result) == "table" then
 			iface.Update(result)
+			-- Presentation-only: reflect the authoritative equipped items on the local character.
+			if equipmentVisuals then
+				equipmentVisuals.Apply(result.Equipment)
+			end
 			return result
 		end
 		return nil

@@ -6,6 +6,7 @@ local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local DataStoreService = game:GetService("DataStoreService")
 local CollectionService = game:GetService("CollectionService")
+local ServerStorage = game:GetService("ServerStorage")
 local Workspace = game:GetService("Workspace")
 
 local shared = ReplicatedStorage:WaitForChild("Shared", 10)
@@ -42,6 +43,14 @@ local playerData = PlayerDataService.New(store, {
 -- scene server-side and binds physical enemy instances to repository Enemy runtime IDs. It owns no
 -- gameplay outcome -- health, damage, Gold, and progression stay in the repository services; the
 -- injected adapters below only report physical positions and instance identity.
+-- Optional presentation library: production enemy models keyed by EnemyDefinitionId, owned by the
+-- Studio scene (ServerStorage.AR_Assets.Enemies). World clones a matching template as an enemy's
+-- physical body and falls back to a provisional box when it is absent, so the server still boots in a
+-- place that has not imported the assets. These models are pure presentation -- no Humanoid, no
+-- gameplay authority; the repository Enemy runtime remains the sole source of health/damage/reward.
+local assetLibrary = ServerStorage:FindFirstChild("AR_Assets")
+local enemyTemplates = assetLibrary and assetLibrary:FindFirstChild("Enemies")
+
 local world = World.New({
 	Players = Players,
 	Workspace = Workspace,
@@ -50,6 +59,7 @@ local world = World.New({
 	Warn = warn,
 	Spawn = function(callback, ...) task.spawn(callback, ...) end,
 	Wait = function(seconds) task.wait(seconds) end,
+	EnemyTemplates = enemyTemplates,
 })
 local worldAdapters = {
 	CombatDistanceProvider = world.CombatDistanceProvider,

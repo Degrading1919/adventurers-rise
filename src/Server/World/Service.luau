@@ -63,6 +63,12 @@ export type Runtime = {
 	read Warn: (string) -> (),
 	read Spawn: ((...any) -> (), ...any) -> (),
 	read Wait: (number) -> (),
+	-- Optional presentation seam: a container of production enemy models keyed by EnemyDefinitionId
+	-- (e.g. ServerStorage.AR_Assets.Enemies.enemy_goblin). When a matching template exists it is cloned
+	-- as the enemy's physical body; otherwise a provisional coloured box is built. The template is pure
+	-- presentation -- it carries no Humanoid and no gameplay authority; the repository Enemy runtime
+	-- remains the single source of health/damage/reward. Absent (as in headless tests), the box is used.
+	read EnemyTemplates: Instance?,
 }
 
 type EnemyRecord = {
@@ -71,6 +77,9 @@ type EnemyRecord = {
 	DefinitionId: string,
 	RuntimeId: string,
 	RespawnAt: number?,
+	-- The BaseParts faded on death and restored on respawn. Captured once at build time as a plain
+	-- array so the death/respawn path never needs to re-walk the instance tree.
+	FadeParts: { BasePart },
 }
 
 local Service = {}
@@ -263,37 +272,108 @@ function Service.New(runtime: Runtime)
 		return nearest, nil
 	end
 
-	local function buildEnemyModel(marker: BasePart, definitionId: string, state: any, container: Folder): Model
-		local model = Instance.new("Model")
-		model.Name = "Enemy_" .. definitionId
+		-- Resolve the optional production template for a definition. Nil (no library, or no matching
+		-- child) means "use the provisional box", which is also the path the headless World tests take.
+		local function resolveTemplate(definitionId: string): Instance?
+			local library = runtime.EnemyTemplates
+			if library == nil then
+				return nil
+			end
+			local template = library:FindFirstChild(definitionId)
+			if template and template:IsA("Model") and template.PrimaryPart ~= nil then
+				return template
+			end
+			return nil
+		end
 
-		local body = Instance.new("Part")
-		body.Name = "Body"
-		body.Anchored = true
-		body.CanCollide = false
-		local isBoss = definitionId == "enemy_goblin_chieftain"
-		body.Size = if isBoss then Vector3.new(6, 10, 6) else Vector3.new(3, 5, 3)
-		body.Color = if isBoss then Color3.fromRGB(120, 20, 20) else Color3.fromRGB(70, 130, 60)
-		body.Material = Enum.Material.SmoothPlastic
-		-- Sit the body on the marker so its center is above the floor.
-		body.CFrame = marker.CFrame + Vector3.new(0, body.Size.Y / 2, 0)
-		body.Parent = model
-		model.PrimaryPart = body
+	-- Seat a cloned production model on the marker: its horizontal centre over the marker and its base
+	-- resting on the marker's top surface, from the model's real world AABB (so an arbitrary imported
+	-- pivot or orientation still lands on the floor). Returns the model's world height for label offset.
+	local function seatModelOnMarker(model: Model, marker: BasePart): number
+		local mp = marker.Position
+		model:PivotTo(CFrame.new(mp.X, mp.Y, mp.Z))
+		local minY, maxY = math.huge, -math.huge
+		for _, part in model:GetDescendants() do
+			if part:IsA("BasePart") then
+				local cf, sz = part.CFrame, part.Size
+				for x = -1, 1, 2 do
+					for y = -1, 1, 2 do
+						for z = -1, 1, 2 do
+							local corner = cf * Vector3.new(x * sz.X / 2, y * sz.Y / 2, z * sz.Z / 2)
+							minY = math.min(minY, corner.Y)
+							maxY = math.max(maxY, corner.Y)
+						end
+					end
+				end
+			end
+		end
+		local baseY = mp.Y + marker.Size.Y / 2
+		model:PivotTo(model:GetPivot() + Vector3.new(0, baseY - minY, 0))
+		return maxY - minY
+	end
 
+	local function attachLabel(host: BasePart, offsetY: number, definitionId: string, level: any)
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "Label"
 		billboard.Size = UDim2.new(0, 160, 0, 28)
-		billboard.StudsOffset = Vector3.new(0, body.Size.Y / 2 + 1.5, 0)
+		billboard.StudsOffset = Vector3.new(0, offsetY, 0)
 		billboard.AlwaysOnTop = true
-		billboard.Parent = body
+		billboard.Parent = host
 		local label = Instance.new("TextLabel")
 		label.Size = UDim2.new(1, 0, 1, 0)
 		label.BackgroundTransparency = 1
 		label.TextColor3 = Color3.fromRGB(255, 255, 255)
 		label.TextStrokeTransparency = 0
 		label.TextScaled = true
-		label.Text = enemyLabelText(definitionId, state.Level)
+		label.Text = enemyLabelText(definitionId, level)
 		label.Parent = billboard
+	end
+
+	-- Builds the physical enemy body at a marker and returns it plus the parts to fade on death. Uses
+	-- the injected production template when one exists, else the provisional box; either way the body
+	-- carries the RuntimeId/level attributes and the ENEMY_TAG, and never a Humanoid.
+	local function buildEnemyModel(marker: BasePart, definitionId: string, state: any, container: Folder): (Model, { BasePart })
+		local model: Model
+		local fadeParts: { BasePart } = {}
+		local labelHost: BasePart
+		local labelOffset: number
+
+		local template = resolveTemplate(definitionId)
+		if template then
+			model = (template :: Model):Clone()
+			model.Name = "Enemy_" .. definitionId
+			for _, part in model:GetDescendants() do
+				if part:IsA("BasePart") then
+					part.Anchored = true
+					part.CanCollide = false
+					table.insert(fadeParts, part)
+				end
+			end
+			local height = seatModelOnMarker(model, marker)
+			labelHost = model.PrimaryPart :: BasePart
+			labelOffset = height / 2 + 1.5
+		else
+			model = Instance.new("Model")
+			model.Name = "Enemy_" .. definitionId
+
+			local body = Instance.new("Part")
+			body.Name = "Body"
+			body.Anchored = true
+			body.CanCollide = false
+			local isBoss = definitionId == "enemy_goblin_chieftain"
+			body.Size = if isBoss then Vector3.new(6, 10, 6) else Vector3.new(3, 5, 3)
+			body.Color = if isBoss then Color3.fromRGB(120, 20, 20) else Color3.fromRGB(70, 130, 60)
+			body.Material = Enum.Material.SmoothPlastic
+			-- Sit the body on the marker so its center is above the floor.
+			body.CFrame = marker.CFrame + Vector3.new(0, body.Size.Y / 2, 0)
+			body.Parent = model
+			model.PrimaryPart = body
+			table.insert(fadeParts, body)
+			labelHost = body
+			labelOffset = body.Size.Y / 2 + 1.5
+		end
+
+		attachLabel(labelHost, labelOffset, definitionId, state.Level)
 
 		model:SetAttribute(ATTR_ENEMY_DEFINITION_ID, definitionId)
 		model:SetAttribute(ATTR_ENEMY_RUNTIME_ID, state.RuntimeId)
@@ -301,7 +381,7 @@ function Service.New(runtime: Runtime)
 		model:SetAttribute(ATTR_ENEMY_ALIVE, true)
 		runtime.Collection:AddTag(model, ENEMY_TAG)
 		model.Parent = container
-		return model
+		return model, fadeParts
 	end
 
 	local function rebindModel(record: EnemyRecord, state: any)
@@ -310,10 +390,12 @@ function Service.New(runtime: Runtime)
 		record.Model:SetAttribute(ATTR_ENEMY_RUNTIME_ID, state.RuntimeId)
 		record.Model:SetAttribute(ATTR_ENEMY_LEVEL, state.Level)
 		record.Model:SetAttribute(ATTR_ENEMY_ALIVE, true)
+		for _, part in record.FadeParts do
+			part.Transparency = 0
+		end
+		-- A respawn may roll a new level, so refresh the visible billboard label to match.
 		local body = record.Model.PrimaryPart
 		if body then
-			body.Transparency = 0
-			-- A respawn may roll a new level, so refresh the visible billboard label to match.
 			local billboard = body:FindFirstChild("Label")
 			local label = billboard and billboard:FindFirstChildOfClass("TextLabel")
 			if label then
@@ -329,9 +411,8 @@ function Service.New(runtime: Runtime)
 		-- active engagement, so retaliation must not linger through the respawn delay. Its cooldown and
 		-- runtime->model mapping are cleared defensively at respawn, when the RuntimeId is retired.
 		enemyCombat.ClearEnemy(record.RuntimeId)
-		local body = record.Model.PrimaryPart
-		if body then
-			body.Transparency = 0.7
+		for _, part in record.FadeParts do
+			part.Transparency = 0.7
 		end
 	end
 
@@ -467,7 +548,7 @@ function Service.New(runtime: Runtime)
 					if not state then
 						runtime.Warn(("[World] Enemy create failed for %s: %s"):format(definitionId, tostring(reason)))
 					else
-						local model = buildEnemyModel(marker, definitionId, state, container :: Folder)
+						local model, fadeParts = buildEnemyModel(marker, definitionId, state, container :: Folder)
 						enemyModels[state.RuntimeId] = model
 						table.insert(records, {
 							Model = model,
@@ -475,6 +556,7 @@ function Service.New(runtime: Runtime)
 							DefinitionId = definitionId,
 							RuntimeId = state.RuntimeId,
 							RespawnAt = nil,
+							FadeParts = fadeParts,
 						})
 					end
 				end
