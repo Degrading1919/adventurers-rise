@@ -66,6 +66,7 @@ local worldAdapters = {
 	GatheringNodeResolver = world.GatheringNodeResolver,
 	StationDistanceProvider = world.StationDistanceProvider,
 	ForgeDistanceProvider = world.ForgeDistanceProvider,
+	ShopDistanceProvider = world.ShopDistanceProvider,
 }
 
 -- The trusted client/server transport lives in one Remotes folder: a RemoteFunction for client ->

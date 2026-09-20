@@ -25,6 +25,7 @@ local ENEMY_TAG = "AR_Enemy"
 local NODE_TAG = "AR_GatheringNode"
 local STATION_TAG = "AR_TrainingStation"
 local FORGE_TAG = "AR_Forge"
+local SHOP_TAG = "AR_Shop"
 
 local Controller = {}
 
@@ -101,8 +102,11 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	local BOSS_DEFINITION_ID = "enemy_goblin_chieftain"
 	local BOSS_ENGAGE_RADIUS = 90
 
+	local function enemyBaseName(defId: any): string
+		return if defId == BOSS_DEFINITION_ID then "Goblin Chieftain" else "Goblin"
+	end
 	local function enemyName(defId: any, level: any): string
-		return (if defId == BOSS_DEFINITION_ID then "Goblin Chieftain" else "Goblin") .. (if level then " Lv" .. tostring(level) else "")
+		return enemyBaseName(defId) .. (if level then " Lv" .. tostring(level) else "")
 	end
 	-- Reads an enemy's presentation facts from the authoritative attributes World mirrors onto the model.
 	-- The client only READS these; it never computes, predicts, or writes enemy health.
@@ -245,6 +249,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		local station = nearestTagged(STATION_TAG, position, INTERACT_RADIUS)
 		local node = nearestTagged(NODE_TAG, position, INTERACT_RADIUS)
 		local forge = nearestTagged(FORGE_TAG, position, INTERACT_RADIUS)
+		local shop = nearestTagged(SHOP_TAG, position, INTERACT_RADIUS)
 		currentStationId = if station then station:GetAttribute("StationId") else nil
 
 		-- Soft-target + boss scan, and the authoritative-health readouts + combat-target indicator.
@@ -253,7 +258,8 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		currentTargetLabel = if target then enemyName(target.DefinitionId, target.Level) else nil
 		currentTargetModel = if target then target.Model else nil
 		iface.SetCombat({
-			Target = if target then { Name = enemyName(target.DefinitionId, target.Level), Level = target.Level, Health = target.Health, MaxHealth = target.MaxHealth } else nil,
+			-- Name is the base label; the readout appends the level itself (so it never shows twice).
+			Target = if target then { Name = enemyBaseName(target.DefinitionId), Level = target.Level, Health = target.Health, MaxHealth = target.MaxHealth } else nil,
 			Boss = if boss then { Name = "Goblin Chieftain", Level = boss.Level, Health = boss.Health, MaxHealth = boss.MaxHealth } else nil,
 		})
 		targetHighlight.Adornee = currentTargetModel
@@ -263,6 +269,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			NearStationId = currentStationId,
 			NearNode = node ~= nil,
 			NearForge = forge ~= nil,
+			NearShop = shop ~= nil,
 			TrainingActive = trainingActive,
 			MiningActive = miningActive,
 		})

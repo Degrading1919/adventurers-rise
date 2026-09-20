@@ -1135,14 +1135,93 @@ function Interface.New(player: Player)
 		offlinePanel.Visible = true
 	end
 
-	-- ctx: { NearStationId: string?, NearStationLabel: string?, NearNode: boolean, NearForge: boolean,
-	--        UpgradeCost: number? }
+	-- ===== Contextual interaction info: one compact surface for the nearby station / node / forge / shop =====
+	local contextInfo = make("Frame", {
+		Size = UDim2.new(0, 320, 0, 40), Position = UDim2.new(0.5, 0, 1, -126), AnchorPoint = Vector2.new(0.5, 1),
+		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.2, Visible = false,
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 6) }, contextInfo)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 1, Transparency = 0.5 }, contextInfo)
+	make("UIPadding", { PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, contextInfo)
+	local contextTitle = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 13,
+		TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+	}, contextInfo)
+	local contextDetail = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 0, 18), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		TextSize = 11, TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Text = "",
+	}, contextInfo)
+
+	-- Builds the contextual info from authoritative read-model state (station tiers/rates, node
+	-- requirements, equipped tool, skill levels). All balance data comes from the server; this only
+	-- presents it. Eligibility shown here is a hint -- the server independently validates every action.
+	local function renderContextInfo(ctx: any)
+		if ctx.NearStationId ~= nil then
+			local st = lastState and lastState.PlotStations and lastState.PlotStations[ctx.NearStationId]
+			local skillLabel = if st and SKILL_LABELS[st.SkillId] then SKILL_LABELS[st.SkillId] else "Training"
+			contextTitle.Text = ("%s Station  —  Tier %s"):format(skillLabel, if st then tostring(st.Tier) else "?")
+			if st then
+				local base = ("+%s XP/s"):format(tostring(st.XPPerSecond))
+				local upgrade = if type(st.NextUpgradeCostGold) == "number"
+					then ("Upgrade %dg → +%s XP/s"):format(st.NextUpgradeCostGold, tostring(st.NextXPPerSecond))
+					else "Max tier"
+				contextDetail.Text = if ctx.TrainingActive then ("Training…   (%s)"):format(base) else (base .. "   ·   " .. upgrade)
+			else
+				contextDetail.Text = ""
+			end
+			contextInfo.Visible = true
+			return
+		end
+		if ctx.NearNode == true then
+			local node = if lastState and type(lastState.GatheringNodes) == "table" then lastState.GatheringNodes[1] else nil
+			local name = if node then node.DisplayName else "Iron Ore"
+			local reqLevel = if node then node.RequiredMiningLevel else 1
+			contextTitle.Text = ("%s  —  Mining Lv %s"):format(tostring(name), tostring(reqLevel))
+			local tool = lastState and lastState.Equipment and lastState.Equipment[EquipmentSlots.Tool]
+			local toolName = if type(tool) == "table" then itemLabel(tool.DefinitionId) else nil
+			local miningLevel = (lastState and lastState.Skills and lastState.Skills[SkillIds.Mining] and lastState.Skills[SkillIds.Mining].Level) or 0
+			local status
+			if ctx.MiningActive then
+				status = "Mining…"
+			elseif toolName == nil then
+				status = "Equip a pickaxe (Tool)"
+			elseif miningLevel < reqLevel then
+				status = ("Need Mining Lv %d"):format(reqLevel)
+			else
+				status = "Ready — press Mine"
+			end
+			contextDetail.Text = ("Tool: %s   ·   %s"):format(if toolName then toolName else "none", status)
+			contextInfo.Visible = true
+			return
+		end
+		if ctx.NearForge == true then
+			contextTitle.Text = "Forge"
+			contextDetail.Text = "Open Forge to smelt bars and craft."
+			contextInfo.Visible = true
+			return
+		end
+		if ctx.NearShop == true then
+			contextTitle.Text = "Shop"
+			contextDetail.Text = "Open Shop to buy and sell."
+			contextInfo.Visible = true
+			return
+		end
+		contextInfo.Visible = false
+	end
+
+	-- ctx: { NearStationId: string?, NearNode: boolean, NearForge: boolean, NearShop: boolean,
+	--        UpgradeCost: number?, TrainingActive: boolean?, MiningActive: boolean? }
 	function iface.SetContext(ctx: any)
 		local nearStation = ctx.NearStationId ~= nil
 		local trainUsable = nearStation or ctx.TrainingActive == true
 		trainBtn.Active = trainUsable
 		trainBtn.AutoButtonColor = trainUsable
-		trainBtn.Text = if ctx.TrainingActive then "Stop Train" else "Train"
+		-- Name the trained skill so the player knows Melee vs Defense, not a generic Train.
+		local stationSkillLabel = nil
+		if nearStation and lastState and lastState.PlotStations and lastState.PlotStations[ctx.NearStationId] then
+			stationSkillLabel = SKILL_LABELS[lastState.PlotStations[ctx.NearStationId].SkillId]
+		end
+		trainBtn.Text = if ctx.TrainingActive then "Stop Train" elseif stationSkillLabel then ("Train %s"):format(stationSkillLabel) else "Train"
 		trainBtn.BackgroundColor3 = if ctx.TrainingActive then COLORS.ButtonOn elseif nearStation then COLORS.Button else Color3.fromRGB(45, 47, 55)
 		upgradeBtn.Active = nearStation
 		upgradeBtn.AutoButtonColor = nearStation
@@ -1157,11 +1236,24 @@ function Interface.New(player: Player)
 		local nearForge = ctx.NearForge == true
 		forgeBtn.Active = nearForge
 		forgeBtn.AutoButtonColor = nearForge
+		forgeBtn.BackgroundColor3 = if nearForge then COLORS.Button else Color3.fromRGB(45, 47, 55)
 		-- Once the player walks away from the Forge, the panel/action must stop behaving as usable
 		-- (the server also rejects a far craft). Close it so the buttons can't be tapped from afar.
 		if not nearForge then
 			forgePanel.Visible = false
 		end
+
+		-- Shop is a contextual world interaction, mirroring the Forge: usable only near the shop, and the
+		-- panel closes when the player walks away (the server rejects a far transaction regardless).
+		local nearShop = ctx.NearShop == true
+		shopBtn.Active = nearShop
+		shopBtn.AutoButtonColor = nearShop
+		shopBtn.BackgroundColor3 = if nearShop then COLORS.Button else Color3.fromRGB(45, 47, 55)
+		if not nearShop then
+			shopPanel.Visible = false
+		end
+
+		renderContextInfo(ctx)
 	end
 
 	-- ===== Wire buttons to handlers =====

@@ -144,6 +144,9 @@ local function buildStack(options: any?)
 	-- tests exercise the normal near case; a test sets a large distance to model walking away.
 	local stationDistances: { [string]: number } = {}
 	local forgeDistance = { Value = 0 }
+	-- Shop proximity double: default to "at the shop" (distance 0, keyed by catalog/shop id) so existing
+	-- economy tests exercise the normal near case; a test sets a large distance to model shopping remotely.
+	local shopDistances: { [string]: number } = {}
 	local worldAdapters = {
 		CombatDistanceProvider = function(_attackerUserId: number, enemyState: any): (number?, string?)
 			local distance = combatDistances[enemyState.RuntimeId]
@@ -168,6 +171,13 @@ local function buildStack(options: any?)
 		end,
 		ForgeDistanceProvider = function(_userId: number): (number?, string?)
 			return forgeDistance.Value, nil
+		end,
+		ShopDistanceProvider = function(_userId: number, shopId: string): (number?, string?)
+			local distance = shopDistances[shopId]
+			if distance == nil then
+				return 0, nil
+			end
+			return distance, nil
 		end,
 	}
 
@@ -208,6 +218,7 @@ local function buildStack(options: any?)
 	f.GatheringNodes = gatheringNodes
 	f.StationDistances = stationDistances
 	f.ForgeDistance = forgeDistance
+	f.ShopDistances = shopDistances
 	f.Warnings = warnings
 	f.Advance = advance
 	f.Clock = monotonicClock
@@ -311,6 +322,9 @@ test("the fail-closed placeholder world adapters report the missing Studio bound
 	local node, nodeReason = CompositionWorldAdapters.FailClosedGatheringNodeResolver()(7, "node_iron_ore")
 	equal(node, nil)
 	equal(nodeReason, "WorldAdapterNotConfigured")
+	local shopDistance, shopReason = CompositionWorldAdapters.FailClosedShopDistanceProvider()(7, "shop_hub")
+	equal(shopDistance, nil)
+	equal(shopReason, "WorldAdapterNotConfigured")
 end)
 
 -- ===== Clock-domain separation =====
@@ -1586,6 +1600,83 @@ test("feedback: reading state never awards progression -- repeated reads leave X
 	equal(second.Skills[SkillIds.Melee].Level, first.Skills[SkillIds.Melee].Level)
 	equal(second.Gold, first.Gold)
 	equal(second.Mastery[SkillIds.Melee].EarnedPoints, first.Mastery[SkillIds.Melee].EarnedPoints)
+end)
+
+-- ===== Shop world proximity =====
+test("shop: buying through shop_hub requires physical proximity, independent of the client", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.PlayerData.Update(7, function(data) data.Gold = 100 end))
+	f.ShopDistances["shop_hub"] = 999
+	local far = request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 1 })
+	equal(far.Ok, false)
+	equal(far.Reason, "TooFarFromShop")
+	f.ShopDistances["shop_hub"] = 0
+	f.Advance(1) -- clear the per-request throttle before the retry
+	local near = request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 1 })
+	assert(near.Ok, near.Reason)
+	equal(assert(f.Composition.Services.Inventory.GetSnapshot(7)).Stacks.item_iron_ore, 1)
+end)
+
+test("shop: selling through shop_hub is proximity-gated too", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.Composition.Services.Inventory.AddStack(7, "item_iron_ore", 5))
+	f.ShopDistances["shop_hub"] = 999
+	local far = request(f, 7, RequestIds.EconomySellStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 1 })
+	equal(far.Ok, false)
+	equal(far.Reason, "TooFarFromShop")
+	f.ShopDistances["shop_hub"] = 0
+	f.Advance(1) -- clear the per-request throttle before the retry
+	assert(request(f, 7, RequestIds.EconomySellStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 1 }).Ok)
+end)
+
+-- ===== Station / node information (sanitized read model) =====
+test("the read model surfaces station tier/rate/upgrade-benefit so the client needn't duplicate balance data", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local state = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	local melee = state.PlotStations["station_training_melee"]
+	equal(melee.SkillId, SkillIds.Melee)
+	equal(melee.Tier, 1)
+	equal(melee.XPPerSecond, 1)
+	equal(melee.NextUpgradeCostGold, 100)
+	equal(melee.NextXPPerSecond, 2)
+	local defense = state.PlotStations["station_training_defense"]
+	equal(defense.SkillId, SkillIds.Defense)
+	equal(defense.NextUpgradeCostGold, 125)
+	equal(defense.NextXPPerSecond, 2)
+end)
+
+test("upgrading a station refreshes the surfaced tier/rate and clears the next-tier fields at max tier", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	assert(f.PlayerData.Update(7, function(data) data.Gold = 1000 end))
+	assert(request(f, 7, RequestIds.PlotUpgradeStation, { StationId = "station_training_melee" }).Ok)
+	local state = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	local melee = state.PlotStations["station_training_melee"]
+	equal(melee.Tier, 2)
+	equal(melee.XPPerSecond, 2)
+	equal(melee.NextUpgradeCostGold, nil)
+	equal(melee.NextXPPerSecond, nil)
+end)
+
+test("the read model surfaces the Iron Ore node's sanitized requirements for the node info panel", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local state = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	assert(type(state.GatheringNodes) == "table" and #state.GatheringNodes >= 1)
+	local iron
+	for _, n in state.GatheringNodes do
+		if n.NodeId == GatheringNodeIds.IronOre then
+			iron = n
+		end
+	end
+	assert(iron ~= nil, "Iron Ore node requirements are present")
+	equal(iron.DisplayName, "Iron Ore")
+	equal(iron.OutputItemId, "item_iron_ore")
+	equal(iron.SkillId, SkillIds.Mining)
+	equal(iron.RequiredMiningLevel, 1)
 end)
 
 print(("%d Composition checks passed"):format(passed))

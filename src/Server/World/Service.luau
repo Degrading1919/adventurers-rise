@@ -17,6 +17,7 @@ local ENEMY_TAG = "AR_Enemy"
 local GATHERING_NODE_TAG = "AR_GatheringNode"
 local TRAINING_STATION_TAG = "AR_TrainingStation"
 local FORGE_TAG = "AR_Forge"
+local SHOP_TAG = "AR_Shop"
 
 -- Attribute keys (stable identifiers, never display names).
 local ATTR_ENEMY_DEFINITION_ID = "EnemyDefinitionId"
@@ -30,6 +31,7 @@ local ATTR_ENEMY_HEALTH = "EnemyHealth"
 local ATTR_ENEMY_MAX_HEALTH = "EnemyMaxHealth"
 local ATTR_GATHERING_NODE_ID = "GatheringNodeId"
 local ATTR_STATION_ID = "StationId"
+local ATTR_SHOP_ID = "ShopId"
 
 -- Provisional respawn cadence and a low-frequency death poll. Event-driven death is not exposed by
 -- the repository Enemies service, so a single shared poll re-reads authoritative Alive state; this is
@@ -294,6 +296,26 @@ function Service.New(runtime: Runtime)
 		local nearest = nearestTaggedDistance(position, FORGE_TAG, nil)
 		if nearest == nil then
 			return nil, "ForgeInstanceNotFound"
+		end
+		return nearest, nil
+	end
+
+	-- ShopDistanceProvider: (userId, shopId) -> (distance, reason). Real physical distance from the player
+	-- to the AR_Shop instance carrying that stable ShopId (the same stable id as the Economy catalog it
+	-- fronts). Fail closed when the player is absent or no such Shop exists in the world.
+	function service.ShopDistanceProvider(userId: number, shopId: string): (number?, string?)
+		if type(shopId) ~= "string" or shopId == "" then
+			return nil, "InvalidShopId"
+		end
+		local position, reason = characterPosition(userId)
+		if not position then
+			return nil, reason
+		end
+		local nearest = nearestTaggedDistance(position, SHOP_TAG, function(instance)
+			return instance:GetAttribute(ATTR_SHOP_ID) == shopId
+		end)
+		if nearest == nil then
+			return nil, "ShopInstanceNotFound"
 		end
 		return nearest, nil
 	end

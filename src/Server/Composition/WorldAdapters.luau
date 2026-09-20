@@ -10,11 +10,13 @@ export type CombatDistanceProvider = (number, any) -> (number?, string?)
 export type GatheringNodeResolver = (number, string) -> (any?, string?)
 export type StationDistanceProvider = (number, string) -> (number?, string?)
 export type ForgeDistanceProvider = (number) -> (number?, string?)
+export type ShopDistanceProvider = (number, string) -> (number?, string?)
 export type WorldAdapters = {
 	CombatDistanceProvider: CombatDistanceProvider,
 	GatheringNodeResolver: GatheringNodeResolver,
 	StationDistanceProvider: StationDistanceProvider,
 	ForgeDistanceProvider: ForgeDistanceProvider,
+	ShopDistanceProvider: ShopDistanceProvider,
 }
 
 local WorldAdapters = {}
@@ -39,6 +41,12 @@ end
 
 function WorldAdapters.FailClosedForgeDistanceProvider(): ForgeDistanceProvider
 	return function(_userId: number): (number?, string?)
+		return nil, "WorldAdapterNotConfigured"
+	end
+end
+
+function WorldAdapters.FailClosedShopDistanceProvider(): ShopDistanceProvider
+	return function(_userId: number, _shopId: string): (number?, string?)
 		return nil, "WorldAdapterNotConfigured"
 	end
 end
