@@ -7,18 +7,23 @@
 --
 -- Authority boundary: the client never marks a step complete, grants the onboarding Gold reward, or
 -- sets a flag. It may only REQUEST to acknowledge the starter focus (a one-time UI confirmation), and
--- read the derived view. Every historical milestone is written from a trusted server path:
---   * NoteGoblinDefeated  -- called by CombatRewards exactly when a normal enemy death is consumed;
---   * Settle              -- reconciles from authoritative state after each request: latches the Gold,
---                            first-ore, first-bar, and upgraded-weapon milestones, and grants the
---                            once-only post-training Gold reward inside a single transaction.
--- Because these facts are durable flags (or monotonic levels/rank), a player who later spends Gold,
--- consumes ore/bars, or sells the sword never regresses to an already-completed step.
+-- read the derived view. Every historical action milestone is written ONLY from the trusted server
+-- path that proves the action actually happened -- never inferred from mere inventory presence (which
+-- a purchase or an external grant could fabricate):
+--   * NoteGoblinDefeated -- CombatRewards, on the hit that consumes an actual EnemyIds.Goblin death;
+--   * NoteOreGathered    -- a successful Gathering settlement that awarded Iron Ore (not buying ore);
+--   * NoteBarSmithed     -- a successful recipe_iron_bar craft at the Forge (not owning a bar).
+-- Settle reconciles only the milestones that ARE safe to derive from authoritative state: the Gold
+-- threshold, the upgraded-weapon acquisition (owning it, from either crafting or buying), and the
+-- once-only post-training Gold reward, inside a single transaction.
+-- Because every milestone is a durable flag (or a monotonic level/rank), a player who later spends
+-- Gold, consumes ore/bars, or sells the sword never regresses to an already-completed step.
 
 local Definitions = require(script.Parent.Definitions)
 
 local ProgressionFlagIds = require(game:GetService("ReplicatedStorage").Shared.ProgressionFlagIds)
 local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
+local EnemyIds = require(game:GetService("ReplicatedStorage").Shared.EnemyIds)
 
 export type Skills = { read GetStateFromData: (any, string) -> (any?, string?) }
 export type Economy = { read CreditGoldToData: (any, number) -> (number?, string?) }
@@ -61,15 +66,6 @@ function Service.New(playerData: PlayerData, deps: { Skills: Skills, Economy: Ec
 			return state.Level
 		end
 		return 0
-	end
-
-	local function stackCount(data: any, definitionId: string): number
-		local inventory = data.Inventory
-		if type(inventory) ~= "table" or type(inventory.Stacks) ~= "table" then
-			return 0
-		end
-		local count = inventory.Stacks[definitionId]
-		return if type(count) == "number" and count > 0 then count else 0
 	end
 
 	local function ownsDefinition(data: any, definitionId: string): boolean
@@ -165,33 +161,61 @@ function Service.New(playerData: PlayerData, deps: { Skills: Skills, Economy: Ec
 		return { Complete = true, Index = total, Total = total }, nil
 	end
 
+	-- Sets a one-time progression flag, skipping the write when it is already set. Fail-closed: an
+	-- invalid user or an unready session records nothing.
+	local function setFlagOnce(userId: number, flagId: string): (boolean, string?)
+		if not validUserId(userId) then
+			return false, "InvalidUserId"
+		end
+		local data = playerData.GetSnapshot(userId)
+		if not data then
+			return false, "NotReady"
+		end
+		if flagSet(data, flagId) then
+			return true, nil
+		end
+		return playerData.Update(userId, function(d)
+			d.ProgressionFlags[flagId] = true
+		end)
+	end
+
 	-- Records the starter-focus acknowledgement (a one-time UI confirmation). This is the ONLY
 	-- onboarding write a client request may trigger, and it grants nothing but the flag itself.
 	function service.AcknowledgeStarterFocus(userId: number): (any?, string?)
-		if not validUserId(userId) then
-			return nil, "InvalidUserId"
-		end
-		local ok, reason = playerData.Update(userId, function(data)
-			local flags = data.ProgressionFlags
-			flags[Flags.OnboardingStarterFocusAcknowledged] = true
-		end)
+		local ok, reason = setFlagOnce(userId, Flags.OnboardingStarterFocusAcknowledged)
 		if not ok then
 			return nil, reason or "PlayerDataUpdateFailed"
 		end
 		return { Acknowledged = true }, nil
 	end
 
-	-- Called by CombatRewards on the single hit that consumes a NORMAL enemy's death. Idempotent, and
-	-- deliberately not derivable from Gold (bosses and other paths also grant Gold). Best-effort: a
-	-- transient write failure simply means the next Goblin defeat latches it.
-	function service.NoteGoblinDefeated(userId: number): (boolean, string?)
-		if not validUserId(userId) then
-			return false, "InvalidUserId"
+	-- Called by CombatRewards on the hit that consumes a normal enemy's death, with that enemy's
+	-- definition id. The milestone is specifically "first Goblin defeated", so any non-Goblin normal
+	-- enemy (a future archetype) records nothing. Idempotent and best-effort.
+	function service.NoteGoblinDefeated(userId: number, definitionId: any): (boolean, string?)
+		if definitionId ~= EnemyIds.Goblin then
+			return false, "NotGoblin"
 		end
-		return playerData.Update(userId, function(data)
-			local flags = data.ProgressionFlags
-			flags[Flags.OnboardingFirstGoblinDefeated] = true
-		end)
+		return setFlagOnce(userId, Flags.OnboardingFirstGoblinDefeated)
+	end
+
+	-- Called after a successful Gathering settlement that actually awarded ore, with the awarded item's
+	-- definition id. Only Iron Ore counts, so buying ore or an external grant -- neither of which flows
+	-- through here -- can never satisfy the Mining objective.
+	function service.NoteOreGathered(userId: number, oreDefinitionId: any): (boolean, string?)
+		if oreDefinitionId ~= Definitions.IronOreDefinitionId then
+			return false, "NotIronOre"
+		end
+		return setFlagOnce(userId, Flags.OnboardingFirstOreGathered)
+	end
+
+	-- Called after a successful craft, with the completed recipe id. Only the Iron Bar recipe counts,
+	-- so merely owning a bar (bought, granted, or received another way) never satisfies Smelting.
+	function service.NoteBarSmithed(userId: number, recipeId: any): (boolean, string?)
+		if recipeId ~= Definitions.IronBarRecipeId then
+			return false, "NotIronBarRecipe"
+		end
+		return setFlagOnce(userId, Flags.OnboardingFirstBarSmithed)
 	end
 
 	-- Reconciles the state-derivable historical milestones and grants the once-only post-training Gold
@@ -211,16 +235,14 @@ function Service.New(playerData: PlayerData, deps: { Skills: Skills, Economy: Ec
 		local rewardDue = (not flagSet(data, Flags.OnboardingTrainingRewardGranted))
 			and skillLevel(data, SkillIds.Melee) >= Definitions.MeleeTargetLevel
 			and skillLevel(data, SkillIds.Defense) >= Definitions.DefenseTargetLevel
-		local ore = stackCount(data, Definitions.IronOreDefinitionId)
-		local bar = stackCount(data, Definitions.IronBarDefinitionId)
 		local goldDue = (not flagSet(data, Flags.OnboardingGoldMilestoneReached))
 			and type(data.Gold) == "number" and data.Gold >= Definitions.GoldMilestoneGold
-		local oreDue = (not flagSet(data, Flags.OnboardingFirstOreGathered)) and (ore > 0 or bar > 0)
-		local barDue = (not flagSet(data, Flags.OnboardingFirstBarSmithed)) and bar > 0
 		local upgradeDue = (not flagSet(data, Flags.OnboardingUpgradedWeaponAcquired))
 			and ownsDefinition(data, Definitions.UpgradedWeaponDefinitionId)
 
-		if not (rewardDue or goldDue or oreDue or barDue or upgradeDue) then
+		-- First-ore and first-bar are NOT reconciled here: they must be proven by an actual gathering
+		-- award / Iron Bar craft (see NoteOreGathered / NoteBarSmithed), never by inventory presence.
+		if not (rewardDue or goldDue or upgradeDue) then
 			return
 		end
 
@@ -243,14 +265,6 @@ function Service.New(playerData: PlayerData, deps: { Skills: Skills, Economy: Ec
 			end
 			if not flags[Flags.OnboardingGoldMilestoneReached] and type(d.Gold) == "number" and d.Gold >= Definitions.GoldMilestoneGold then
 				flags[Flags.OnboardingGoldMilestoneReached] = true
-			end
-			local dOre = stackCount(d, Definitions.IronOreDefinitionId)
-			local dBar = stackCount(d, Definitions.IronBarDefinitionId)
-			if not flags[Flags.OnboardingFirstOreGathered] and (dOre > 0 or dBar > 0) then
-				flags[Flags.OnboardingFirstOreGathered] = true
-			end
-			if not flags[Flags.OnboardingFirstBarSmithed] and dBar > 0 then
-				flags[Flags.OnboardingFirstBarSmithed] = true
 			end
 			if not flags[Flags.OnboardingUpgradedWeaponAcquired] and ownsDefinition(d, Definitions.UpgradedWeaponDefinitionId) then
 				flags[Flags.OnboardingUpgradedWeaponAcquired] = true

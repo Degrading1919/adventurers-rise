@@ -39,6 +39,12 @@ local Definitions = {
 	UpgradedWeaponDefinitionId = "weapon_sword_upgraded",
 	IronOreDefinitionId = "item_iron_ore",
 	IronBarDefinitionId = "item_iron_bar",
+	-- The recipe whose successful completion proves Smithing occurred (mirrors Shared/RecipeIds.IronBar).
+	IronBarRecipeId = "recipe_iron_bar",
+	-- Stable training-station IDs (mirror Plots/StationDefinitions), used only as guidance-target filters
+	-- so the client highlights the specific station for the current objective.
+	MeleeStationId = "station_training_melee",
+	DefenseStationId = "station_training_defense",
 }
 
 local stepIds: { [string]: string } = {
@@ -73,7 +79,7 @@ local ordered = {
 		Hint = "Stand on the Melee Training station and press Train.",
 		Check = { Kind = "SkillLevel", SkillId = SkillIds.Melee, Level = Definitions.MeleeTargetLevel },
 		Progress = { Kind = "SkillLevel", SkillId = SkillIds.Melee, Level = Definitions.MeleeTargetLevel },
-		Target = { Tag = TAG_TRAINING_STATION },
+		Target = { Tag = TAG_TRAINING_STATION, MatchAttribute = "StationId", MatchValue = Definitions.MeleeStationId },
 	},
 	{
 		Id = S.TrainDefense,
@@ -81,7 +87,7 @@ local ordered = {
 		Hint = "Stand on the Defense Training station and press Train.",
 		Check = { Kind = "SkillLevel", SkillId = SkillIds.Defense, Level = Definitions.DefenseTargetLevel },
 		Progress = { Kind = "SkillLevel", SkillId = SkillIds.Defense, Level = Definitions.DefenseTargetLevel },
-		Target = { Tag = TAG_TRAINING_STATION },
+		Target = { Tag = TAG_TRAINING_STATION, MatchAttribute = "StationId", MatchValue = Definitions.DefenseStationId },
 	},
 	{
 		Id = S.FightGoblins,

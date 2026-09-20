@@ -23,10 +23,16 @@ local function validUserId(value: any): boolean
 	return type(value) == "number" and value > 0 and value % 1 == 0 and value <= 9007199254740991
 end
 
-function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock: () -> number): Coordinator
+-- onOreAwarded (optional): a best-effort presentation/observer sink fired once per settled chunk that
+-- actually awarded ore, with the Gathering Result. It owns no gameplay authority (the award already
+-- committed inside GatherForElapsed) and MUST NOT raise -- callers wrap their own work defensively so a
+-- misbehaving observer can never break the shared settlement heartbeat.
+function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock: () -> number, onOreAwarded: ((number, any) -> ())?): Coordinator
 	assert(type(gathering) == "table" and type(gathering.GatherForElapsed) == "function" and type(gathering.ValidateForBegin) == "function" and type(gathering.ResetCarry) == "function", "GatheringSessions requires Gathering")
 	assert(type(maximumElapsedSeconds) == "number" and maximumElapsedSeconds > 0, "GatheringSessions requires a positive chunk boundary")
 	assert(type(clock) == "function", "GatheringSessions requires a trusted server clock")
+	assert(onOreAwarded == nil or type(onOreAwarded) == "function", "GatheringSessions onOreAwarded must be a function when provided")
+	local notifyOreAwarded: (number, any) -> () = onOreAwarded or function() end
 
 	local sessions: { [number]: { NodeId: string, LastSettledAt: number } } = {}
 	local coordinator = {}
@@ -89,6 +95,9 @@ function Service.New(gathering: Gathering, maximumElapsedSeconds: number, clock:
 				return nil, reason
 			end
 			lastResult = result
+			-- This chunk committed a real ore award; report it (best-effort) for observers such as the
+			-- onboarding first-ore milestone. It never affects the authoritative settlement.
+			notifyOreAwarded(userId, result)
 			elapsed -= chunk
 			session.LastSettledAt += chunk
 		end

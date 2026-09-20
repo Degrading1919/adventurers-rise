@@ -1,6 +1,7 @@
 --!strict
 
 local SkillIds = require("SkillIds")
+local EnemyIds = require("EnemyIds")
 local ProgressionFlagIds = require("ProgressionFlagIds")
 local Definitions = require("OnboardingDefinitions")
 local Onboarding = require("OnboardingService")
@@ -158,18 +159,25 @@ test("a Goblin defeat records the milestone; Gold alone never satisfies it", fun
 	-- Even with plenty of Gold, the fight step is not complete until the defeat is recorded.
 	store.data.Gold = 9999
 	equal((assert(service.GetView(USER))).StepId, Steps.FightGoblins)
-	assert(service.NoteGoblinDefeated(USER))
+	assert(service.NoteGoblinDefeated(USER, EnemyIds.Goblin))
 	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstGoblinDefeated], true)
 	-- Gold milestone latches from Settle (>= threshold) so the next step is mining.
 	service.Settle(USER)
 	equal((assert(service.GetView(USER))).StepId, Steps.MineOre)
 end)
 
-test("NoteGoblinDefeated rejects an invalid userId (no fabricated milestone)", function()
+test("only an actual Goblin records the defeat milestone; the Chieftain or another archetype does not", function()
 	local service, store = newService(freshData())
-	local ok = service.NoteGoblinDefeated(0)
-	equal(ok, false)
+	-- Wrong archetypes record nothing (the Chieftain is a boss; a hypothetical future enemy is not the goblin).
+	equal(service.NoteGoblinDefeated(USER, EnemyIds.GoblinChieftain), false)
+	equal(service.NoteGoblinDefeated(USER, "enemy_future_archetype"), false)
 	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstGoblinDefeated], nil)
+	-- An invalid user cannot fabricate it either.
+	equal(service.NoteGoblinDefeated(0, EnemyIds.Goblin), false)
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstGoblinDefeated], nil)
+	-- Only the real Goblin sets it.
+	assert(service.NoteGoblinDefeated(USER, EnemyIds.Goblin))
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstGoblinDefeated], true)
 end)
 
 -- ===== Gold milestone does not regress after spending =====
@@ -185,23 +193,47 @@ test("the Gold milestone does not regress after the player spends Gold", functio
 	equal(flags[ProgressionFlagIds.OnboardingGoldMilestoneReached], true)
 end)
 
--- ===== Mining / smithing milestones survive consuming the materials =====
-test("mining and smithing milestones do not regress after materials are consumed", function()
-	local data = freshData()
-	local service, store = newService(data)
-	store.data.Inventory.Stacks[Definitions.IronOreDefinitionId] = 3
+-- ===== Mining / smithing milestones prove the ACTION, not inventory presence =====
+test("inventory presence alone never fabricates the mining or smithing milestone", function()
+	local service, store = newService(freshData())
+	-- Ore and bars simply sitting in inventory (bought, granted, externally injected) prove nothing.
+	store.data.Inventory.Stacks[Definitions.IronOreDefinitionId] = 5
+	store.data.Inventory.Stacks[Definitions.IronBarDefinitionId] = 3
+	service.Settle(USER)
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstOreGathered], nil)
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstBarSmithed], nil)
+	-- The wrong item / recipe through the trusted note also records nothing.
+	equal(service.NoteOreGathered(USER, "item_iron_bar"), false)
+	equal(service.NoteBarSmithed(USER, "recipe_sword_upgraded"), false)
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstOreGathered], nil)
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstBarSmithed], nil)
+end)
+
+test("actual Iron Ore gathering and Iron Bar crafting record their milestones, which survive consuming the materials", function()
+	local service, store = newService(freshData())
+	-- A real gathering award of Iron Ore records first-ore; a real Iron Bar craft records first-bar.
+	assert(service.NoteOreGathered(USER, Definitions.IronOreDefinitionId))
+	assert(service.NoteBarSmithed(USER, Definitions.IronBarRecipeId))
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstOreGathered], true)
+	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstBarSmithed], true)
+	-- Consuming/selling every ore and bar leaves both historical flags set.
+	store.data.Inventory.Stacks = {}
 	service.Settle(USER)
 	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstOreGathered], true)
-	-- Consume all ore into a bar: first-ore stays, first-bar latches.
-	store.data.Inventory.Stacks[Definitions.IronOreDefinitionId] = nil
-	store.data.Inventory.Stacks[Definitions.IronBarDefinitionId] = 1
-	service.Settle(USER)
 	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstBarSmithed], true)
-	-- Consume the bar too: both historical flags remain set.
-	store.data.Inventory.Stacks[Definitions.IronBarDefinitionId] = nil
-	service.Settle(USER)
-	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstOreGathered], true)
-	equal(store.data.ProgressionFlags[ProgressionFlagIds.OnboardingFirstBarSmithed], true)
+end)
+
+test("the Melee and Defense objectives target their specific training stations by StationId", function()
+	local byId: { [string]: any } = {}
+	for _, step in Definitions.Ordered do
+		byId[step.Id] = step
+	end
+	local melee = byId[Steps.TrainMelee].Target
+	equal(melee.MatchAttribute, "StationId")
+	equal(melee.MatchValue, Definitions.MeleeStationId)
+	local defense = byId[Steps.TrainDefense].Target
+	equal(defense.MatchAttribute, "StationId")
+	equal(defense.MatchValue, Definitions.DefenseStationId)
 end)
 
 -- ===== Upgrade accepts either acquisition route and survives a later sell =====

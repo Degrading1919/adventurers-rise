@@ -21,7 +21,7 @@ export type Bosses = {
 
 local Service = {}
 
-function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> (), announceBossReward: (any) -> (), onNormalEnemyDefeated: (number) -> ())
+function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses: Bosses, warn: (string) -> (), announceBossReward: (any) -> (), onNormalEnemyDefeated: (number, string) -> ())
 	assert(type(combat) == "table" and type(combat.ResolveMeleeAttack) == "function", "CombatRewards requires Combat")
 	assert(type(enemies) == "table" and type(enemies.GetSnapshot) == "function" and type(enemies.ConsumeDeath) == "function", "CombatRewards requires Enemies")
 	assert(type(economy) == "table" and type(economy.CreditGold) == "function", "CombatRewards requires Economy")
@@ -63,13 +63,14 @@ function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses:
 			else
 				local death = enemies.ConsumeDeath(targetId)
 				if death then
-					-- This hit consumed a NORMAL enemy's death (exactly-once by construction), so record the
-					-- one-time onboarding "first Goblin defeated" milestone. Isolated in pcall and done before
-					-- the Gold credit so a defeat is recorded even if the (separate) payout path has an issue;
-					-- a transient failure just means the next defeat latches it.
-					local noted = pcall(onNormalEnemyDefeated, userId)
+					-- This hit consumed a NORMAL enemy's death (exactly-once by construction). Report it with
+					-- the enemy's definition id so the onboarding sink can record the "first Goblin defeated"
+					-- milestone ONLY for an actual Goblin, not any future non-boss archetype. Isolated in pcall
+					-- and done before the Gold credit so a defeat is reported even if the (separate) payout path
+					-- has an issue; a transient failure just means the next defeat reports it.
+					local noted = pcall(onNormalEnemyDefeated, userId, (snapshot :: any).DefinitionId)
 					if not noted then
-						warn(("[CombatRewards] Onboarding goblin-defeat note failed for %d on %s"):format(userId, targetId))
+						warn(("[CombatRewards] Onboarding normal-enemy note failed for %d on %s"):format(userId, targetId))
 					end
 				end
 				if death and (death :: any).GoldReward and (death :: any).GoldReward > 0 then

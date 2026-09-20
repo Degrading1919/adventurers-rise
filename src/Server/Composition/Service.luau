@@ -273,12 +273,19 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- Economy (the atomic post-training Gold reward); everything else it reads from data.
 	local onboarding = OnboardingService.New(playerData, { Skills = skills, Economy = economy })
 
-	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock)
+	-- Onboarding first-ore milestone: recorded only from a real Mining settlement that actually awarded
+	-- Iron Ore (onboarding filters by item), so buying ore never satisfies it. Best-effort and pcall-
+	-- isolated so an onboarding write can never break the shared gathering-settlement heartbeat.
+	local gatheringSessions = GatheringSessions.New(gathering, GatheringService.MaximumElapsedSeconds, runtime.Clock, function(userId: number, result: any)
+		if type(result) == "table" and type(result.OreAmount) == "number" and result.OreAmount > 0 then
+			pcall(onboarding.NoteOreGathered, userId, result.OreDefinitionId)
+		end
+	end)
 	local trainingSessions = TrainingSessions.New(plots, PlotsService.MaximumElapsedSeconds, runtime.Clock, nearStation)
-	-- CombatRewards records the one-time "first Goblin defeated" onboarding milestone on the hit that
-	-- consumes a normal enemy's death -- the smallest existing authoritative combat seam for it.
-	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn, announceBossReward, function(userId: number)
-		onboarding.NoteGoblinDefeated(userId)
+	-- CombatRewards reports the consumed normal-enemy defeat with its definition id; onboarding records
+	-- the one-time "first Goblin defeated" milestone only for an actual Goblin.
+	local combatRewards = CombatRewards.New(combat, enemies, economy, bosses, runtime.Warn, announceBossReward, function(userId: number, definitionId: string)
+		onboarding.NoteGoblinDefeated(userId, definitionId)
 	end)
 
 	local gameplayReady: { [number]: boolean } = {}
@@ -466,7 +473,13 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		elseif payload.Quantity ~= nil then
 			craftRequest = { Quantity = payload.Quantity }
 		end
-		return crafting.Craft(userId, payload.RecipeId, craftRequest)
+		local result, reason = crafting.Craft(userId, payload.RecipeId, craftRequest)
+		if result then
+			-- A successful craft actually used the Forge: record the Smelting milestone only for the Iron
+			-- Bar recipe (onboarding filters by recipe id). Best-effort; never fails the craft.
+			pcall(onboarding.NoteBarSmithed, userId, payload.RecipeId)
+		end
+		return result, reason
 	end
 
 	handlers[RequestIds.AscensionAscend] = function(userId: number, payload: any): (any?, string?)

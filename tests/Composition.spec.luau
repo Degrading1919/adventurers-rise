@@ -1420,6 +1420,18 @@ local function onboarding(f, userId)
 	assert(res.Ok, "StateGet failed: " .. tostring(res.Reason))
 	return res.Result.Onboarding
 end
+-- Sets a persisted progression flag directly (test setup only -- never a client-reachable path), used
+-- to advance a player to a specific onboarding step without replaying the whole chain.
+local function setFlag(f, userId, flagId)
+	assert(f.PlayerData.Update(userId, function(data) data.ProgressionFlags[flagId] = true end))
+end
+local function seedToStep(f, userId)
+	setSkillLevel(f, userId, SkillIds.Melee, 2)
+	setSkillLevel(f, userId, SkillIds.Defense, 2)
+	setFlag(f, userId, ProgressionFlagIds.OnboardingStarterFocusAcknowledged)
+	setFlag(f, userId, ProgressionFlagIds.OnboardingFirstGoblinDefeated)
+	setFlag(f, userId, ProgressionFlagIds.OnboardingGoldMilestoneReached)
+end
 
 test("onboarding: a fresh player's read model begins at the starter-focus step", function()
 	local f = fixture()
@@ -1500,6 +1512,50 @@ test("onboarding: a client cannot skip steps or fabricate Gold via an unknown or
 	assert(request(f, 7, RequestIds.OnboardingAcknowledgeStarterFocus, { StepId = Steps.AscendAdept, Gold = 9999 }).Ok)
 	equal(onboarding(f, 7).StepId, Steps.TrainMelee)
 	equal(assert(f.Composition.Services.Economy.GetGold(7)), 0)
+end)
+
+test("onboarding: buying Iron Ore never completes Mine Ore, but an actual Mining award does", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantPickaxe(f, 7)
+	seedToStep(f, 7)
+	equal(onboarding(f, 7).StepId, Steps.MineOre)
+	-- Buy Iron Ore from the hub shop: legitimate, but it must NOT complete the Mining objective.
+	assert(f.PlayerData.Update(7, function(data) data.Gold = 100 end))
+	assert(request(f, 7, RequestIds.EconomyPurchaseStack, { CatalogId = "shop_hub", DefinitionId = "item_iron_ore", Amount = 2 }).Ok)
+	equal(onboarding(f, 7).StepId, Steps.MineOre)
+	-- Actually gather Iron Ore: a real Mining settlement records the milestone and advances.
+	f.GatheringNodes[GatheringNodeIds.IronOre] = { Eligible = true, Distance = 1 }
+	assert(request(f, 7, RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre }).Ok)
+	f.Advance(5)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+end)
+
+test("onboarding: owning an Iron Bar never completes Smelt Bar; a successful Iron Bar craft does", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	seedToStep(f, 7)
+	setFlag(f, 7, ProgressionFlagIds.OnboardingFirstOreGathered)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+	-- An injected Iron Bar (as if bought or granted) must NOT complete Smelting.
+	assert(f.PlayerData.Update(7, function(data) data.Inventory.Stacks.item_iron_bar = 3 end))
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+	-- Give ore and craft the Iron Bar recipe at the Forge (forge distance defaults to 0): this records it.
+	assert(f.PlayerData.Update(7, function(data) data.Inventory.Stacks.item_iron_ore = 4 end))
+	assert(request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Quantity = 1 }).Ok)
+	equal(onboarding(f, 7).StepId, Steps.AcquireUpgrade)
+end)
+
+test("onboarding: a failed Iron Bar craft does not complete Smelt Bar", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	seedToStep(f, 7)
+	setFlag(f, 7, ProgressionFlagIds.OnboardingFirstOreGathered)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
+	-- No ore in inventory: the craft fails, so no Smelting milestone is recorded.
+	local failed = request(f, 7, RequestIds.CraftingCraft, { RecipeId = "recipe_iron_bar", Quantity = 1 })
+	equal(failed.Ok, false)
+	equal(onboarding(f, 7).StepId, Steps.SmeltBar)
 end)
 
 print(("%d Composition checks passed"):format(passed))
