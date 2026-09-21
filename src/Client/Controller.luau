@@ -102,8 +102,15 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	local BOSS_DEFINITION_ID = "enemy_goblin_chieftain"
 	local BOSS_ENGAGE_RADIUS = 90
 
+	-- Presentation-only enemy display names (stable IDs stay authoritative). A missing id falls back to
+	-- a neutral word rather than mislabelling a new archetype.
+	local ENEMY_DISPLAY_NAMES: { [string]: string } = {
+		enemy_goblin = "Goblin",
+		enemy_goblin_chieftain = "Goblin Chieftain",
+		enemy_wolf = "Wolf",
+	}
 	local function enemyBaseName(defId: any): string
-		return if defId == BOSS_DEFINITION_ID then "Goblin Chieftain" else "Goblin"
+		return (type(defId) == "string" and ENEMY_DISPLAY_NAMES[defId]) or "Enemy"
 	end
 	local function enemyName(defId: any, level: any): string
 		return enemyBaseName(defId) .. (if level then " Lv" .. tostring(level) else "")

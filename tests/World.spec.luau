@@ -114,6 +114,9 @@ local cframeMeta = { __add = function(a, _) return a end }
 local function makeCFrame(): any
 	return setmetatable({}, cframeMeta)
 end
+-- Minimal CFrame stand-in: only CFrame.new is exercised in tests (the respawn re-seat path). The
+-- movement pass's CFrame.lookAt/Angles/.Rotation run only under a live Heartbeat, never headlessly.
+CFrame = { new = function() return makeCFrame() end }
 
 -- Permissive fake Instance: stores any property, tracks parented children, answers the handful of
 -- methods buildEnemyModel / the death poll call. Values are stored on a side table so __newindex never
@@ -149,6 +152,7 @@ local function newInstance(className: string): any
 	methods.GetPivot = function()
 		return { Position = Vector3.new(0, 0, 0) }
 	end
+	methods.PivotTo = function() end
 	methods.__addChild = function(name, child)
 		children[name] = child
 	end
@@ -180,6 +184,7 @@ local function makeEnv(): (any, any)
 	local marker = newInstance("Part")
 	marker:SetAttribute("EnemyDefinitionId", "enemy_goblin")
 	marker.CFrame = makeCFrame()
+	marker.Position = Vector3.new(0, 0, 0)
 	local folder = newInstance("Folder")
 	local waitCount = 0
 	local runtime = {
@@ -396,6 +401,7 @@ test("respawn refreshes the mirrored max/current health and the RuntimeId from t
 	local marker = newInstance("Part")
 	marker:SetAttribute("EnemyDefinitionId", "enemy_goblin")
 	marker.CFrame = makeCFrame()
+	marker.Position = Vector3.new(0, 0, 0)
 	local folder = newInstance("Folder")
 	local clockVal = 0
 	local waitCount = 0
@@ -464,6 +470,74 @@ test("respawn refreshes the mirrored max/current health and the RuntimeId from t
 	equal(described[1].Alive, true)
 	equal(#calls.remove, 1)
 	equal(calls.remove[1], "rid-1")
+end)
+
+-- ----------------------------------------------------------------------------------------------------
+-- Territories: a tagged marker declares an archetype + population, and World builds a whole localized
+-- population from it (proving the data-driven multi-archetype spawning the living-world layer needs).
+-- ----------------------------------------------------------------------------------------------------
+test("a territory marker spawns its whole configured population of the assigned archetype", function()
+	local territory = newInstance("Part")
+	territory:SetAttribute("EnemyDefinitionId", "enemy_wolf")
+	territory:SetAttribute("Population", 3)
+	territory:SetAttribute("Radius", 20)
+	territory.CFrame = makeCFrame()
+	territory.Position = Vector3.new(100, 0, 100)
+	local folder = newInstance("Folder")
+	local waitCount = 0
+	local created = 0
+	local runtime = {
+		Players = {
+			__isInstance = true,
+			GetPlayers = function() return {} end,
+			GetPlayerByUserId = function() return nil end,
+			PlayerAdded = { Connect = function() return { Disconnect = function() end } end },
+		},
+		Workspace = { __isInstance = true, FindFirstChild = function() return folder end },
+		Collection = {
+			__isInstance = true,
+			GetTagged = function(_, tag)
+				if tag == "AR_EnemyTerritory" then
+					return { territory }
+				end
+				return {}
+			end,
+			AddTag = function() end,
+		},
+		Clock = function() return 0 end,
+		Warn = function() end,
+		Spawn = function(fn, ...) fn(...) end,
+		Wait = function()
+			waitCount += 1
+			if waitCount >= 2 then
+				error("__stop__", 0)
+			end
+		end,
+	}
+	local enemies = {
+		Create = function(defId)
+			created += 1
+			return { RuntimeId = "wolf-" .. tostring(created), Level = 3, DefinitionId = defId, MaxHealth = 26, Health = 26, Alive = true }, nil
+		end,
+		GetSnapshot = function(rid) return { Alive = true, RuntimeId = rid, Health = 26, MaxHealth = 26 } end,
+		Remove = function() end,
+	}
+	local resolver = {
+		ResolveAttack = function() return nil, "NotEngaged" end,
+		OnSpawn = function() end,
+		ClearEnemy = function() end,
+	}
+	local service = World.New(runtime)
+	local ok = pcall(function() service.Start(enemies, resolver) end)
+	assert(not ok, "expected the stubbed loop halt")
+	-- Three wolves were created for the population of 3, all of the assigned archetype.
+	equal(created, 3)
+	local described = service.DescribeEnemies()
+	equal(#described, 3)
+	for _, entry in described do
+		equal(entry.DefinitionId, "enemy_wolf")
+		equal(entry.Alive, true)
+	end
 end)
 
 print(("%d World checks passed"):format(passed))
