@@ -356,6 +356,10 @@ function Interface.New(player: Player)
 	local skillsPanel, skillsContent = panel("Skills — Progress", 320)
 	local starterPanel, starterContent = panel("Choose Your Focus", 300)
 
+	-- Forward-declared so the progression Menu popup (created later) shares the same close lifecycle as
+	-- the modal panels: opening any panel closes it, and opening it closes any panel.
+	local menu: Frame? = nil
+
 	local function hideAllPanels()
 		forgePanel.Visible = false
 		gearPanel.Visible = false
@@ -365,6 +369,9 @@ function Interface.New(player: Player)
 		masteryPanel.Visible = false
 		skillsPanel.Visible = false
 		starterPanel.Visible = false
+		if menu then
+			menu.Visible = false
+		end
 	end
 
 	-- ---- Starter-focus framing panel ----
@@ -935,12 +942,13 @@ function Interface.New(player: Player)
 		renderMastery()
 		masteryPanel.Visible = true
 	end
-	-- One-line framing so the skill → XP → Mastery relationship reads at a glance: train a skill to earn
-	-- levels, each level grants a Mastery Point, spend them in that skill's tree via the "Mastery" button.
+	-- One-line framing so the skill → XP → Mastery relationship reads at a glance: train a skill toward
+	-- level milestones, which grant Mastery Points to spend in that skill's tree via the "Mastery" button.
+	-- (Points come at milestone levels, not every level; the authoritative thresholds live server-side.)
 	make("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 12,
 		TextColor3 = COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
-		TextWrapped = true, Text = "Level up a skill to earn Mastery Points, then spend them in its tree.",
+		TextWrapped = true, Text = "Reach level milestones in a skill to earn Mastery Points, then spend them in its tree.",
 	}, skillsContent)
 	local skillsList = make("ScrollingFrame", {
 		Size = UDim2.new(1, 0, 1, -32), Position = UDim2.new(0, 0, 0, 32), BackgroundTransparency = 1, ScrollBarThickness = 4,
@@ -1301,27 +1309,30 @@ function Interface.New(player: Player)
 	end
 
 	-- ctx: { NearStationId: string?, NearNode: boolean, NearForge: boolean, NearShop: boolean,
-	--        UpgradeCost: number?, TrainingActive: boolean?, MiningActive: boolean? }
+	--        TrainingActive: boolean?, MiningActive: boolean? }
 	function iface.SetContext(ctx: any)
 		-- World-contextual buttons are shown only where the action is actually possible (or in progress),
 		-- so the bar never carries permanently prominent buttons for actions the player can't do here.
 		-- The server still owns proximity authority; hiding a button is presentation only.
 		local nearStation = ctx.NearStationId ~= nil
+		-- Read the nearby station's authoritative state once (skill label, and whether a next tier exists).
+		local station = if nearStation and lastState and lastState.PlotStations then lastState.PlotStations[ctx.NearStationId] else nil
 		local trainUsable = nearStation or ctx.TrainingActive == true
 		trainBtn.Visible = trainUsable
 		trainBtn.Active = trainUsable
 		trainBtn.AutoButtonColor = trainUsable
 		-- Name the trained skill so the player knows Melee vs Defense, not a generic Train.
-		local stationSkillLabel = nil
-		if nearStation and lastState and lastState.PlotStations and lastState.PlotStations[ctx.NearStationId] then
-			stationSkillLabel = SKILL_LABELS[lastState.PlotStations[ctx.NearStationId].SkillId]
-		end
+		local stationSkillLabel = if station then SKILL_LABELS[station.SkillId] else nil
 		trainBtn.Text = if ctx.TrainingActive then "Stop Train" elseif stationSkillLabel then ("Train %s"):format(stationSkillLabel) else "Train"
 		trainBtn.BackgroundColor3 = if ctx.TrainingActive then COLORS.ButtonOn elseif nearStation then COLORS.Button else COLORS.Disabled
-		upgradeBtn.Visible = nearStation
-		upgradeBtn.Active = nearStation
-		upgradeBtn.AutoButtonColor = nearStation
-		upgradeBtn.Text = if nearStation and ctx.UpgradeCost then ("Upgrade (%d g)"):format(ctx.UpgradeCost) else "Upgrade"
+		-- Upgrade only makes sense where a next tier actually exists; a max-tier station (authoritative
+		-- NextUpgradeCostGold == nil) shows its "Max tier" context line but no Upgrade action. Cost comes
+		-- straight from the read model -- tier definitions are never duplicated client-side.
+		local upgradeUsable = station ~= nil and type(station.NextUpgradeCostGold) == "number"
+		upgradeBtn.Visible = upgradeUsable
+		upgradeBtn.Active = upgradeUsable
+		upgradeBtn.AutoButtonColor = upgradeUsable
+		upgradeBtn.Text = if upgradeUsable then ("Upgrade (%d g)"):format(station.NextUpgradeCostGold) else "Upgrade"
 
 		local mineUsable = ctx.NearNode == true or ctx.MiningActive == true
 		mineBtn.Visible = mineUsable
@@ -1393,23 +1404,24 @@ function Interface.New(player: Player)
 	-- ===== Progression menu (grouped destinations) =====
 	-- Gear, Skills, Ascend, and Offline live behind one "Menu" button instead of each holding a
 	-- permanent bar slot. This is a single flat popup, not a nested menu tree.
-	local menu = make("Frame", {
+	local menuFrame = make("Frame", {
 		Size = UDim2.new(0, 176, 0, 0), Position = UDim2.new(1, -12, 1, -80), AnchorPoint = Vector2.new(1, 1),
 		BackgroundColor3 = COLORS.Panel, BackgroundTransparency = 0.05, Visible = false, AutomaticSize = Enum.AutomaticSize.Y,
 	}, screen)
-	make("UICorner", { CornerRadius = UDim.new(0, 8) }, menu)
-	make("UIStroke", { Color = COLORS.Accent, Thickness = 1, Transparency = 0.4 }, menu)
-	make("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, menu)
-	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, menu)
+	menu = menuFrame -- share the forward-declared handle so hideAllPanels() closes it too
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, menuFrame)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 1, Transparency = 0.4 }, menuFrame)
+	make("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, menuFrame)
+	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, menuFrame)
 
 	local function menuEntry(text: string, order2: number, open: () -> ()): TextButton
 		local b = make("TextButton", {
 			Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = COLORS.Button, AutoButtonColor = true,
 			Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = COLORS.Text, Text = text, LayoutOrder = order2,
-		}, menu)
+		}, menuFrame)
 		make("UICorner", { CornerRadius = UDim.new(0, 6) }, b)
+		-- hideAllPanels() closes this Menu popup as well, so opening a destination never leaves it behind.
 		b.Activated:Connect(function()
-			menu.Visible = false
 			hideAllPanels()
 			open()
 		end)
@@ -1422,11 +1434,12 @@ function Interface.New(player: Player)
 	menuEntry("Offline", 4, function() renderOffline(); offlinePanel.Visible = true end)
 
 	menuBtn.Activated:Connect(function()
-		if menu.Visible then
-			menu.Visible = false
+		if menuFrame.Visible then
+			menuFrame.Visible = false
 		else
+			-- Mutually exclusive with the modal panels: close any open panel, then show the Menu.
 			hideAllPanels()
-			menu.Visible = true
+			menuFrame.Visible = true
 		end
 	end)
 
