@@ -163,6 +163,35 @@ function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: 
 		return math.clamp(rounded, defenseXP.Minimum, defenseXP.Maximum)
 	end
 
+	-- Read-only predicate: would this enemy engage this player right now? True when the player provoked
+	-- it, or when conditional aggression auto-engages them (appropriate/underpowered for the enemy). Pure
+	-- -- it applies no damage and awards no XP -- so the movement layer can use the SAME rule to decide
+	-- whom to chase, keeping "who the enemy pursues" and "who the enemy hits" consistent. A player the
+	-- enemy has substantially outgrown (and never provoked) is not engaged, so it is left alone.
+	function service.Engages(userId: number, enemyState: any): boolean
+		if type(enemyState) ~= "table" or not validRuntimeId(enemyState.RuntimeId) or type(enemyState.DefinitionId) ~= "string" or not wholeLevel(enemyState.Level) then
+			return false
+		end
+		local definition = EnemyDefinitions.ById[enemyState.DefinitionId]
+		if not definition then
+			return false
+		end
+		if not validUserId(userId) then
+			return false
+		end
+		if isProvoked(enemyState.RuntimeId, userId) then
+			return true
+		end
+		if not playerHealth.IsAlive(userId) then
+			return false
+		end
+		local progression = skills.GetState(userId, configuration.ProgressionSkillId)
+		if not progression or not wholeLevel((progression :: any).Level) then
+			return false
+		end
+		return (enemyState.Level - (progression :: any).Level) >= definition.Aggression.MinimumEnemyLevelDelta
+	end
+
 	-- Resolves one attack attempt from `enemyState` (an Enemy runtime snapshot) against `userId`.
 	-- Returns a result only when the hit actually lands, so the caller sets its cooldown / picks its
 	-- target only then. A player the enemy is neither aggressive toward nor provoked by is skipped

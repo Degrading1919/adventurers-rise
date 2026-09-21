@@ -96,6 +96,9 @@ export type EnemyCombat = {
 	read ResolveAttack: (number, any) -> (any?, string?),
 	read OnSpawn: (number) -> (),
 	read ClearEnemy: (string) -> (),
+	-- Read-only "would this enemy chase this player" predicate, so movement aggression uses the same
+	-- conditional-aggression rule as combat (an enemy never pursues a player it would not attack).
+	read Engages: (number, any) -> boolean,
 }
 
 export type Runtime = {
@@ -648,36 +651,50 @@ function Service.New(runtime: Runtime)
 	-- kinematically steps the anchored body toward the intent, keeping it grounded, facing its heading,
 	-- with a gentle walk bob. Moving the model's pivot is the WHOLE integration: combat range, enemy
 	-- melee, and the client all read the live pivot, so they stay consistent for free. This owns no
-	-- gameplay outcome -- it never touches health, damage, aggression eligibility, or rewards.
-	local function movePass(dt: number)
+	-- gameplay outcome -- it never applies damage, awards XP, or decides who is hit; it only decides
+	-- where the body walks, and defers WHOM to chase to the same conditional-aggression rule combat uses.
+	local function movePass(dt: number, enemies: Enemies, enemyCombat: EnemyCombat)
 		if #records == 0 then
 			return
 		end
-		local playerPositions: { Vector3 } = {}
+		local players: { { UserId: number, Position: Vector3 } } = {}
 		for _, player in runtime.Players:GetPlayers() do
 			local character = player.Character
 			local root = character and character:FindFirstChild("HumanoidRootPart")
 			if root and root:IsA("BasePart") then
-				table.insert(playerPositions, root.Position)
+				table.insert(players, { UserId = player.UserId, Position = root.Position })
 			end
 		end
 		local now = runtime.Clock()
 		for _, record in records do
 			if record.RespawnAt == nil and record.Model.PrimaryPart ~= nil then
 				local base = record.BasePosition
-				-- Nearest player (flat) + sleep gate: an enemy with no player within activation range
-				-- skips its brain entirely this frame.
-				local nearest: Vector3? = nil
-				local nearestDist: number? = nil
-				for _, p in playerPositions do
-					local dx, dz = p.X - base.X, p.Z - base.Z
+				-- Sleep gate: skip the brain entirely when no player is within activation range at all.
+				local nearestAnyDist: number? = nil
+				for _, p in players do
+					local dx, dz = p.Position.X - base.X, p.Position.Z - base.Z
 					local d = math.sqrt(dx * dx + dz * dz)
-					if nearestDist == nil or d < nearestDist then
-						nearest = p
-						nearestDist = d
+					if nearestAnyDist == nil or d < nearestAnyDist then
+						nearestAnyDist = d
 					end
 				end
-				if nearestDist ~= nil and nearestDist <= ACTIVATION_RADIUS then
+				if nearestAnyDist ~= nil and nearestAnyDist <= ACTIVATION_RADIUS then
+					-- Chase target = the nearest player this enemy would actually engage (conditional
+					-- aggression / provocation). Players it has outgrown are ignored by movement too, so it
+					-- never pursues someone it would not attack. Roaming/returning ignore players entirely.
+					local nearest: Vector3? = nil
+					local nearestDist: number? = nil
+					local snapshot = enemies.GetSnapshot(record.RuntimeId)
+					if snapshot and snapshot.Alive then
+						for _, p in players do
+							local dx, dz = p.Position.X - base.X, p.Position.Z - base.Z
+							local d = math.sqrt(dx * dx + dz * dz)
+							if (nearestDist == nil or d < nearestDist) and enemyCombat.Engages(p.UserId, snapshot) then
+								nearest = p.Position
+								nearestDist = d
+							end
+						end
+					end
 					local memory, intent = EnemyAI.Step(record.AIMemory, {
 						Home = record.Home,
 						Current = base,
@@ -744,7 +761,8 @@ function Service.New(runtime: Runtime)
 			type(enemyCombat) == "table"
 				and type(enemyCombat.ResolveAttack) == "function"
 				and type(enemyCombat.OnSpawn) == "function"
-				and type(enemyCombat.ClearEnemy) == "function",
+				and type(enemyCombat.ClearEnemy) == "function"
+				and type(enemyCombat.Engages) == "function",
 			"World.Start requires the enemy-combat resolver"
 		)
 
@@ -859,7 +877,7 @@ function Service.New(runtime: Runtime)
 		-- headless tests, so enemies there stay put and only their combat/lifecycle facts are asserted.
 		if runtime.Heartbeat ~= nil then
 			runtime.Heartbeat:Connect(function(dt: number)
-				movePass(dt)
+				movePass(dt, enemies, enemyCombat)
 			end)
 		end
 	end

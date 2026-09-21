@@ -263,6 +263,7 @@ local function makeResolver(calls: any, omit: string?): any
 		ClearEnemy = function(runtimeId)
 			table.insert(calls.clearEnemy, runtimeId)
 		end,
+		Engages = function() return false end,
 	}
 	if omit then
 		resolverDouble[omit] = nil
@@ -270,7 +271,7 @@ local function makeResolver(calls: any, omit: string?): any
 	return resolverDouble
 end
 
-for _, method in { "ResolveAttack", "OnSpawn", "ClearEnemy" } do
+for _, method in { "ResolveAttack", "OnSpawn", "ClearEnemy", "Engages" } do
 	test("Start fails immediately when the enemy-combat resolver is missing " .. method, function()
 		local runtime, calls = makeEnv()
 		local service = World.New(runtime)
@@ -457,6 +458,7 @@ test("respawn refreshes the mirrored max/current health and the RuntimeId from t
 		ResolveAttack = function() return nil, "NotEngaged" end,
 		OnSpawn = function() end,
 		ClearEnemy = function(rid) table.insert(calls.clearEnemy, rid) end,
+		Engages = function() return false end,
 	}
 	local service = World.New(runtime)
 	local ok = pcall(function() service.Start(enemies, resolver) end)
@@ -526,6 +528,7 @@ test("a territory marker spawns its whole configured population of the assigned 
 		ResolveAttack = function() return nil, "NotEngaged" end,
 		OnSpawn = function() end,
 		ClearEnemy = function() end,
+		Engages = function() return false end,
 	}
 	local service = World.New(runtime)
 	local ok = pcall(function() service.Start(enemies, resolver) end)
