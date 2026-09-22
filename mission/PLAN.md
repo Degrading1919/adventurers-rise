@@ -12,13 +12,14 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phase 1 & 2 DONE. Phase 3 armor slice CODE-COMPLETE (22 suites green), pending Studio playtest.
+## CURRENT PHASE: Phase 1 & 2 DONE. Phase 3 iron-armor slice DONE + Studio-verified (22 suites green). Continuing Phase 3 with a 2nd resource + gear tier.
 Phase 3 approach (DONE for iron tier): Head/Body/Legs slots + an armor damage-reduction stat folded into the EXISTING EnemyCombat `IncomingDamageReduction` slot via the Composition defense-modifier provider (so EnemyCombat itself is unchanged — least-regression). Iron set (helm 0.04 / body 0.07 / legs 0.05 = 0.16) craftable from Iron Bars via Smithing (helm Lv4 / legs Lv6 / body Lv7). Gear panel + Forge are data-driven so armor appears/equips automatically (added ITEM_LABELS + SLOT_LABELS). EquipmentVisuals iterates only Weapon/Tool → armor has no character visual yet (clean seam). New Composition test proves 16% reduction through the real pipeline.
 
-## NEXT ACTION — Phase 3 continued
-1. **Studio-integrate + playtest the iron armor loop** (sync branch code into the place; craft helm/body/legs at the Forge, equip in Gear, verify reduced enemy damage in Play; regression pass of the existing loop). Update PROGRESS with the result. **SAVE THE PLACE.**
-2. **2nd resource + tier:** add a second gatherable resource (2nd ore or wood) with a gathering node + geography, then a Steel (or copper→iron→steel) weapon+armor tier so gear is a real ladder, not a single step. Data-driven via Gathering/Crafting Definitions + Ids. Test + playtest.
-3. **Shop integration:** optionally sell/buy armor via Economy/ShopCatalog so gear is obtainable by gold too.
-4. Independent evaluator at Phase-3 end: re-grade criterion 5 (weapons AND armor tiers that visibly ease/gate) + 8 (gather→produce chains). Consider surfacing an armor/defense readout in the read model so the benefit is legible (Phase 5 polish candidate).
+## NEXT ACTION — Phase 3 continued (iron armor loop DONE + Studio-verified @ 4f3d7c7)
+1. **2nd resource + gear tier:** add a second gatherable resource (2nd ore, e.g. Coal, or Wood) with a gathering node + geography on the difficulty gradient, then a Steel weapon+armor tier (Iron + Coal → Steel Bar → steel sword + steel Head/Body/Legs) so gear is a real ladder, not a single step. Data-driven via Gathering/Crafting/Item Definitions + the *Ids modules. Steel armor should out-protect iron (e.g. ~0.24 set) and gate a harder zone. Test + Studio playtest (sync + StateGet recipe check + in-engine data check, same recipe as the iron slice).
+2. **Shop integration:** optionally sell/buy armor via Economy/ShopCatalog so gear is obtainable by gold too (a fallback path for players who dislike grinding Smithing).
+3. Independent evaluator at Phase-3 end: re-grade criterion 5 (weapons AND armor tiers that visibly ease/gate) + 8 (gather→produce chains). Consider surfacing an armor/defense readout in the read model so the benefit is legible in the Gear panel (Phase 5 polish candidate; would let a live player SEE the mitigation number).
+
+Note on live playtest tooling: the MCP `execute_luau` runs in a Luau state sandboxed from the running server's `_G`, so the Bootstrap `_G.__AdventurersRiseServer` debug seam is NOT reachable to seed PlayerData. Drive live checks through the real client RemoteFunction `ReplicatedStorage.Remotes.Request:InvokeServer(RequestIds.*, payload)` (Client datamodel) and in-engine `require` of synced modules (Server datamodel). Full hands-on loops need a dev-store player already leveled/stocked.
 
 Remember: **SAVE THE PLACE** (Studio-owned world not in Git). Fresh-context bootstrap in MISSION.md.
