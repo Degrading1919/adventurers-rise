@@ -1459,6 +1459,47 @@ function Interface.New(player: Player)
 		end
 	end
 
+	-- ===== Region-entry banner (open-world zone announcements) =====
+	-- A large, briefly-shown title + blurb when the player enters a named zone, so the world reads as
+	-- distinct places. Presentation only; the Controller drives it from RegionDefinitions.ZoneAt.
+	local TweenService = game:GetService("TweenService")
+	local regionBanner = make("Frame", {
+		Size = UDim2.new(1, -40, 0, 78), Position = UDim2.new(0.5, 0, 0.22, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1, Visible = false,
+	}, screen)
+	capSize(regionBanner, 560)
+	local regionTitle = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1, Font = Enum.Font.GothamBlack, TextSize = 36,
+		TextColor3 = COLORS.Text, TextTransparency = 1, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 1, Text = "",
+	}, regionBanner)
+	local regionBlurb = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 22), Position = UDim2.new(0, 0, 0, 50), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium,
+		TextSize = 15, TextColor3 = COLORS.Dim, TextTransparency = 1, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 1,
+		TextWrapped = true, Text = "",
+	}, regionBanner)
+	local bannerToken = 0
+	function iface.ShowRegionBanner(displayName: any, blurb: any)
+		bannerToken += 1
+		local myToken = bannerToken
+		regionTitle.Text = tostring(displayName)
+		regionBlurb.Text = tostring(blurb or "")
+		regionBanner.Visible = true
+		local tin = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		TweenService:Create(regionTitle, tin, { TextTransparency = 0, TextStrokeTransparency = 0.35 }):Play()
+		TweenService:Create(regionBlurb, tin, { TextTransparency = 0.08, TextStrokeTransparency = 0.55 }):Play()
+		task.delay(2.8, function()
+			if myToken ~= bannerToken then return end
+			local tout = TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			TweenService:Create(regionTitle, tout, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+			TweenService:Create(regionBlurb, tout, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+			task.delay(0.75, function()
+				if myToken == bannerToken then
+					regionBanner.Visible = false
+				end
+			end)
+		end)
+	end
+
 	return iface
 end
 

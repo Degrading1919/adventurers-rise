@@ -14,6 +14,7 @@ local RequestIds = require(Shared:WaitForChild("RequestIds"))
 local GatheringNodeIds = require(Shared:WaitForChild("GatheringNodeIds"))
 local AscensionIds = require(Shared:WaitForChild("AscensionIds"))
 local EventIds = require(Shared:WaitForChild("EventIds"))
+local RegionDefinitions = require(Shared:WaitForChild("RegionDefinitions"))
 
 local INTERACT_RADIUS = 14
 local TARGET_RADIUS = 60
@@ -158,7 +159,10 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	-- Subtly highlights the nearest world object relevant to the CURRENT objective only. It never
 	-- decides completion; the server owns that. Enemies are tagged models; static world objects are
 	-- invisible anchor parts carrying a "Visual" mesh child, so we adorn the visible mesh when present.
-	local GUIDE_RADIUS = 90
+	-- Region-scale so the current objective stays findable across the open world; the close-range
+	-- outline only kicks in within HIGHLIGHT_RADIUS once the player is near it.
+	local GUIDE_RADIUS = 480
+	local HIGHLIGHT_RADIUS = 90
 	local guidanceHighlight = Instance.new("Highlight")
 	guidanceHighlight.Name = "AR_ObjectiveGuide"
 	guidanceHighlight.FillColor = Color3.fromRGB(120, 180, 255)
@@ -168,6 +172,38 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	guidanceHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 	guidanceHighlight.Enabled = false
 	guidanceHighlight.Parent = workspace
+
+	-- A tall light beacon at the current objective so it can be seen and walked toward from a distance
+	-- (the open world is far larger than a single highlight radius). Hidden below the map when idle.
+	local objectiveBeacon = Instance.new("Part")
+	objectiveBeacon.Name = "AR_ObjectiveBeacon"
+	objectiveBeacon.Anchored = true
+	objectiveBeacon.CanCollide = false
+	objectiveBeacon.CanQuery = false
+	objectiveBeacon.CanTouch = false
+	objectiveBeacon.Shape = Enum.PartType.Cylinder
+	objectiveBeacon.Size = Vector3.new(120, 4, 4) -- length along X; rotated to vertical when placed
+	objectiveBeacon.Material = Enum.Material.Neon
+	objectiveBeacon.Color = Color3.fromRGB(120, 190, 255)
+	objectiveBeacon.Transparency = 0.55
+	objectiveBeacon.CFrame = CFrame.new(0, -1000, 0)
+	objectiveBeacon.Parent = workspace
+	local beaconBillboard = Instance.new("BillboardGui")
+	beaconBillboard.Name = "Marker"
+	beaconBillboard.Size = UDim2.new(0, 130, 0, 28)
+	beaconBillboard.StudsOffset = Vector3.new(0, 4, 0)
+	beaconBillboard.AlwaysOnTop = true
+	beaconBillboard.Enabled = false
+	beaconBillboard.Parent = objectiveBeacon
+	local beaconLabel = Instance.new("TextLabel")
+	beaconLabel.Size = UDim2.new(1, 0, 1, 0)
+	beaconLabel.BackgroundTransparency = 1
+	beaconLabel.Font = Enum.Font.GothamBold
+	beaconLabel.TextSize = 15
+	beaconLabel.TextColor3 = Color3.fromRGB(205, 228, 255)
+	beaconLabel.TextStrokeTransparency = 0
+	beaconLabel.Text = "Objective"
+	beaconLabel.Parent = beaconBillboard
 
 	-- Distinct combat-target indicator (warm tint) so it never fights the cool objective-guidance
 	-- highlight over the same presentation object; when both would pick the same model, guidance yields.
@@ -199,14 +235,20 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		end
 		return nil
 	end
+	local function hideBeacon()
+		beaconBillboard.Enabled = false
+		objectiveBeacon.CFrame = CFrame.new(0, -1000, 0)
+	end
 	local function updateGuidance(position: Vector3?)
 		local target = objectiveTarget
 		if not position or type(target) ~= "table" or type(target.Tag) ~= "string" then
 			guidanceHighlight.Enabled = false
 			guidanceHighlight.Adornee = nil
+			hideBeacon()
 			return
 		end
 		local best: Instance? = nil
+		local bestPos: Vector3? = nil
 		local bestDist: number? = nil
 		for _, inst in CollectionService:GetTagged(target.Tag) do
 			if inst:IsDescendantOf(workspace) then
@@ -220,23 +262,34 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 						local d = (position - p).Magnitude
 						if d <= GUIDE_RADIUS and (bestDist == nil or d < bestDist) then
 							best = inst
+							bestPos = p
 							bestDist = d
 						end
 					end
 				end
 			end
 		end
-		-- Coexist with the combat-target indicator: if the objective would highlight the very model the
-		-- player is currently targeting, let the (warm) combat indicator own it -- no double outline.
-		if best ~= nil and best == currentTargetModel then
-			best = nil
+		-- Beacon at the nearest matching objective, visible region-wide (so the player can head toward it).
+		if best ~= nil and bestPos ~= nil then
+			objectiveBeacon.CFrame = CFrame.new(bestPos + Vector3.new(0, 60, 0)) * CFrame.Angles(0, 0, math.rad(90))
+			beaconBillboard.Enabled = true
+		else
+			hideBeacon()
 		end
-		local adornee = if best then adorneeFor(best) else nil
+		-- Close-range outline only when near, and never on the model the (warm) combat indicator owns.
+		local outlineBest = best
+		if outlineBest ~= nil and (bestDist == nil or bestDist > HIGHLIGHT_RADIUS or outlineBest == currentTargetModel) then
+			outlineBest = nil
+		end
+		local adornee = if outlineBest then adorneeFor(outlineBest) else nil
 		guidanceHighlight.Adornee = adornee
 		guidanceHighlight.Enabled = adornee ~= nil
 	end
 
 	-- ===== Proximity / targeting loop =====
+	-- Tracks the player's current open-world zone (from the pure RegionDefinitions.ZoneAt); a change
+	-- fires the region-entry banner. Presentation only -- the server owns all gameplay.
+	local currentZoneId: string? = nil
 	local proximityAccum = 0
 	RunService.Heartbeat:Connect(function(dt)
 		proximityAccum += dt
@@ -282,6 +335,16 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		})
 
 		updateGuidance(position)
+
+		-- Region-entry banner: announce a newly entered named zone (leaving to open wilderness is quiet).
+		local zone = RegionDefinitions.ZoneAt(position.X, position.Z)
+		local zid = if zone then zone.Id else nil
+		if zid ~= currentZoneId then
+			currentZoneId = zid
+			if zone then
+				iface.ShowRegionBanner(zone.DisplayName, zone.Blurb)
+			end
+		end
 
 		-- Keep client mining state honest: if we drift out of range while mining, end it so the
 		-- server session and the UI agree (the server also fails such a session closed on settle).

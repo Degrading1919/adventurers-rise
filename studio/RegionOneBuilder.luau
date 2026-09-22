@@ -164,10 +164,16 @@ local function setTerritory(id: string, centre: Vector3, radius: number, populat
 		end
 	end
 end
-setTerritory("goblin_camp", ZONES.meadow + Vector3.new(-40, 0, 40), 48, 5) -- near meadow (starter combat)
-setTerritory("goblin_ruins", ZONES.meadow + Vector3.new(60, 0, -50), 44, 4) -- deeper meadow escalation
-setTerritory("wolf_den", ZONES.forest, 52, 4) -- Whispering Woods
-setTerritory("chieftain_arena", ZONES.warren, 8, 1) -- Goblin Warren boss
+-- Difficulty gradient east: near-town starter goblins -> mid-meadow goblins -> deep warren boss.
+-- Markers sit at the terrain surface (SURFACE) so enemies seat on top of the ground, not sunk into it.
+local SURFACE = 2
+setTerritory("goblin_camp", Vector3.new(160, SURFACE, 25), 46, 5) -- near-town starter combat
+setTerritory("goblin_ruins", Vector3.new(255, SURFACE, -60), 44, 4) -- mid-meadow escalation
+setTerritory("wolf_den", Vector3.new(0, SURFACE, 255), 52, 4) -- Whispering Woods
+setTerritory("chieftain_arena", Vector3.new(330, SURFACE, 10), 8, 1) -- Goblin Warren boss (deepest)
+-- Players spawn on the surface, not inside the terrain.
+local spawn = workspace:FindFirstChild("AR_Spawn")
+if spawn and spawn:IsA("BasePart") then spawn.Position = Vector3.new(spawn.Position.X, SURFACE, spawn.Position.Z) end
 
 -- Iron Ore nodes -> Ironrock Hollow (spread in a small vein near the mine entrance).
 local iron = AR:FindFirstChild("IronOre")
@@ -182,11 +188,12 @@ if iron then
 	end
 end
 
--- ---------- 5) lighting mood: bright grounded-medieval afternoon ----------
-Lighting.ClockTime = 14.2
-Lighting.Brightness = 2.6
-Lighting.OutdoorAmbient = Color3.fromRGB(120, 120, 130)
+-- ---------- 5) lighting mood: bright, clear grounded-medieval afternoon ----------
+Lighting.ClockTime = 14
+Lighting.Brightness = 3
+Lighting.OutdoorAmbient = Color3.fromRGB(140, 140, 145)
+Lighting.Ambient = Color3.fromRGB(90, 90, 95)
 local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
-if atmos then atmos.Density = 0.34; atmos.Haze = 1.4; atmos.Color = Color3.fromRGB(210, 214, 224) end
+if atmos then atmos.Density = 0.08; atmos.Haze = 0.4; atmos.Glare = 0; atmos.Color = Color3.fromRGB(220, 224, 230); atmos.Decay = Color3.fromRGB(150, 160, 175) end
 
 return ("Region I 'The Marchlands' built: terrain biomes + %d scenery parts; town, mine, ruins, warren landmarks; territories & ore relocated to zones. SAVE THE PLACE to persist."):format(#scenery:GetChildren())
