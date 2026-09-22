@@ -224,6 +224,51 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	targetHighlight.Enabled = false
 	targetHighlight.Parent = workspace
 
+	-- ===== Hit feedback (presentation only; the server owns all damage) =====
+	-- A brief white flash on the struck enemy plus an expanding spark, so landed attacks feel impactful.
+	local TweenService = game:GetService("TweenService")
+	local hitFlash = Instance.new("Highlight")
+	hitFlash.Name = "AR_HitFlash"
+	hitFlash.FillColor = Color3.fromRGB(255, 255, 255)
+	hitFlash.FillTransparency = 0.25
+	hitFlash.OutlineColor = Color3.fromRGB(255, 255, 255)
+	hitFlash.OutlineTransparency = 0.2
+	hitFlash.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hitFlash.Enabled = false
+	hitFlash.Parent = workspace
+	local hitFlashToken = 0
+	local function playHitFx(model: Instance?)
+		if not model or not model.Parent then
+			return
+		end
+		hitFlashToken += 1
+		local myToken = hitFlashToken
+		hitFlash.Adornee = model
+		hitFlash.Enabled = true
+		task.delay(0.11, function()
+			if myToken == hitFlashToken then
+				hitFlash.Enabled = false
+				hitFlash.Adornee = nil
+			end
+		end)
+		local ok, pivot = pcall(function() return (model :: any):GetPivot().Position end)
+		if not ok then return end
+		local spark = Instance.new("Part")
+		spark.Shape = Enum.PartType.Ball
+		spark.Material = Enum.Material.Neon
+		spark.Color = Color3.fromRGB(255, 238, 170)
+		spark.Size = Vector3.new(1.5, 1.5, 1.5)
+		spark.Anchored = true
+		spark.CanCollide = false
+		spark.CanQuery = false
+		spark.CFrame = CFrame.new(pivot + Vector3.new(0, 2.5, 0))
+		spark.Parent = workspace
+		TweenService:Create(spark, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = Vector3.new(6, 6, 6), Transparency = 1 }):Play()
+		task.delay(0.3, function()
+			spark:Destroy()
+		end)
+	end
+
 	local function adorneeFor(inst: Instance): Instance?
 		local visual = inst:FindFirstChild("Visual")
 		if visual and visual:IsA("Model") then
@@ -381,9 +426,11 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		task.spawn(function()
 			while attackActive do
 				if currentTarget then
+					local hitModel = currentTargetModel
 					local ok, _, reason = net.Request(RequestIds.CombatMeleeAttack, { TargetId = currentTarget })
 					if ok then
 						iface.SetStatus(("Hit %s"):format(currentTargetLabel or "target"))
+						playHitFx(hitModel)
 						refresh()
 					elseif reason == "TargetOutOfRange" then
 						iface.SetStatus(("%s is out of range -- move closer"):format(currentTargetLabel or "Target"))
