@@ -12,13 +12,10 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phase 1 (The World) — repo prep done; Studio integration BLOCKED (place closed)
+## CURRENT PHASE: Phase 1 (The World) — BUILT + VALIDATED; evaluator findings pending
 
-## NEXT ACTION (when the Studio place is reopened)
-1. Reconnect the Studio MCP (place id 136843447225408); run `studio/RegionOneBuilder.luau` via `execute_luau` (Edit mode) to build Region I "The Marchlands". Screenshot; tune terrain/props/positions live.
-2. Sync branch `feature/open-world-rpg` code into the place (raw-fetch script Sources; add new `Shared/RegionIds` + `Shared/RegionDefinitions` ModuleScripts under ReplicatedStorage.Shared).
-3. Implement the client region-entry **banner** + per-zone **ambient audio** (client reads `RegionDefinitions.ZoneAt(playerX, playerZ)` each ~0.3s; swap ambient Sound + show banner on zone change). Add a placeholder ambient Sound per Ambient key.
-4. Playtest: walk the world (town → meadow goblins → forest wolves → hills ore → warren chieftain); verify enemies/resources sit in their zones on a difficulty gradient, banners/audio fire, existing loop still works, no console errors; desktop + mobile viewport. Regression-check the full loop.
-5. Independent evaluator subagent grades Phase 1 vs the DoD rubric using screenshots + runtime state; fix findings; then advance to Phase 2.
+## NEXT ACTION
+1. Read the independent evaluator's Phase-1 report; apply the high-value fixes (likely: prop density/collision & world "convincing-ness", difficulty-gradient realism, banner contrast, fresh-player onboarding across the bigger world). Re-playtest.
+2. Advance to **Phase 2 — enemy ecology + combat feel**: add Region I families (Bandit in Ashen Ruins, Hobgoblin in Ironrock Hollow) as enemy Definitions + territories; add the 2nd boss (Bandit Warlord) on the boss framework; add a loot-table system (enemies drop region resources/gear); add combat feedback (hit flash/sound, attack swing, death fx). Each: implement → Studio-integrate → playtest → independent critic → fix.
 
-Repo prep already landed: RegionIds/RegionDefinitions (+test, 22 suites green) and the run-ready scene-builder.
+Remember: SAVE THE PLACE (Studio-owned world is not in Git). Fresh-context bootstrap in MISSION.md.

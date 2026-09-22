@@ -19,14 +19,17 @@
 - Wolf is a box placeholder — needs art.
 - No audio anywhere. No armor. Single resource/production chain. One region. Flat featureless world.
 
-## Studio scene state (Studio-owned; NOT in Git — the place must be saved to persist)
+## Studio scene state (Studio-owned; NOT in Git — the place MUST BE SAVED to persist)
 - Place id 136843447225408; studio id 1e765b7b-6dd9-439b-bfcc-66b1688e4943; dev DataStore `AdventurersRise_PlayerData_Development` (separate from live).
-- `Workspace.AR_World.Territories` holds 4 `AR_EnemyTerritory` markers (living-world enemies). Old `AR_EnemySpawn` markers removed. Git-owned script Sources were synced into the place at the living-world commit.
-- **The place is currently synced to `feature/living-world-enemies` code.** Re-sync to `feature/open-world-rpg` when world changes land (fetch raw from the branch, set script.Source; HttpEnabled on).
+- **Region I "The Marchlands" is built** (via `studio/RegionOneBuilder.luau`): terrain biomes on a flat walkable surface (~940×940, surface y≈2), scenic edge hills + NW river, `Workspace.AR_World.Scenery` folder (~144 tagged `AR_Scenery` placeholder props: trees/rocks/cottages/mine-entrance/ruined-tower/warren-totems), lighting mood set. Old flat `Ground` part removed.
+- `Workspace.AR_World.Territories` markers relocated to zones (y=2): goblin_camp (160,25) pop5, goblin_ruins (255,-60) pop4, wolf_den (0,255) pop4, chieftain_arena (330,10) pop1. Iron Ore nodes → Ironrock Hollow (0,-270). AR_Spawn raised to y=2.
+- **Place code synced to `feature/open-world-rpg`**: new ModuleScripts `ReplicatedStorage.Shared.RegionIds` + `RegionDefinitions`; updated `Client.Controller` + `Client.Interface`.
+- To re-run/rebuild the world: paste `studio/RegionOneBuilder.luau` body into the MCP execute_luau (Edit). To re-sync code: raw-fetch from the branch, set script.Source (HttpEnabled on).
 
-## BLOCKER (active)
-- **The Studio place is CLOSED** ("Place is not open" from the MCP; both Studio instances report null names). Studio-side world building (terrain/scene) and playtesting are impossible until the owner **reopens the Adventurer's Rise place in Roblox Studio** (with the Studio-MCP plugin connected). Repo prep continues meanwhile; Studio integration + playtest resume the instant the place is back.
+## BLOCKER (resolved)
+- Studio place was closed; reopened and connected. Region I world built + validated in Play.
 
 ## Checkpoint log
 - **[Phase 0]** Mission control system created (`mission/` artifacts + DoD rubric). Branch `feature/open-world-rpg` cut off `feature/living-world-enemies`. Baseline: 21 suites green.
-- **[Phase 1 — repo prep, Studio blocked]** Added `Shared/RegionIds` + `Shared/RegionDefinitions` (Region I "The Marchlands" + 6 zones: Havenbrook town, Green Meadows, Whispering Woods, Ironrock Hollow, Ashen Ruins, Goblin Warren) with a pure `ZoneAt(x,z)` classifier + `RegionDefinitions.spec` (6 checks). **22 suites green.** Authored `studio/RegionOneBuilder.luau` — the reproducible Region I world generator (terrain biomes, edge hills/river, biome props, town/mine/ruins/warren landmarks, relocates hub + territory markers + ore to zones, lighting mood) — RUN-READY to paste into the Studio MCP `execute_luau` (Edit mode) when the place reopens. **NEXT:** run the builder in Studio, then wire client region-banner + ambient audio (reads RegionDefinitions.ZoneAt), sync branch code into the place, playtest, independent critic.
+- **[Phase 1 — repo prep]** Added `Shared/RegionIds` + `Shared/RegionDefinitions` (Region I + 6 zones) with a pure `ZoneAt(x,z)` classifier + spec (6 checks). Authored `studio/RegionOneBuilder.luau`.
+- **[Phase 1 — WORLD BUILT + VALIDATED]** Ran the builder in Studio → Region I "The Marchlands" (terrain biomes, town, landmarks, zoned populations). Added client region-entry **banner** + region-scale objective **beacon** (Controller/Interface). Synced code to the place. Play-tested: zone classification correct across a town→meadow→forest→hills→warren walk; banner renders ("Whispering Woods" etc.); 9 goblins/4 wolves/1 chieftain correctly zoned; terrain walkable, player grounded, console clean; **22 suites green, no regression**. World now reads as distinct places (dirt town vs lush meadow vs treed forest) with a difficulty gradient. **Independent evaluator running.** NEXT: address evaluator findings, then Phase 2 (enemy ecology: Bandit/Hobgoblin + 2nd boss + loot + combat feel).
