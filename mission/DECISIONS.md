@@ -1,0 +1,8 @@
+# DECISIONS — key autonomous calls (append-only)
+
+- **D1 — Build the game's own V1, not a divergent design.** Docs specify a full 3-region V1 only ~1/3 built; the mission target == that V1. Extend the existing data-driven systems; don't invent parallel ones. Use the project's canon names (Borderlands/Elderwood/Shattered Reach, enemy families, material tiers) — original to the project, Caelmor-safe.
+- **D2 — Region I deep-first.** Build "The Borderlands" into a complete, fun open-world vertical (Adventurer→Vanguard) before touching Regions II/III. Depth of one coherent region > shallow skim of three.
+- **D3 — Mission branch `feature/open-world-rpg` off `feature/living-world-enemies`.** Includes the living-world enemies. Final mission draft PR supersedes PR #33 (close #33 in favor of it, or note its commits are ancestors).
+- **D4 — World executor: keep server-side kinematic-CFrame enemy movement** (from living-world work) even on terrain, provided territories sit on walkable ground; revisit Pathfinding only if terrain elevation breaks straight-line movement. Enemy movement stays behind the executor-agnostic `EnemyAI` intent layer.
+- **D5 — World is Studio-owned but reproducibly built.** Author a repository **scene-builder** module run edit-time via the MCP (terrain sculpt + tagged-marker placement) so the world is regenerable and reviewable, while the actual terrain/scene lives in the Studio place (saved by the owner). Repo owns the builder + all data; Studio owns the resulting scene.
+- **D6 — Placeholders:** primitives + Roblox Terrain + (sparingly) Studio generative-mesh/material tools for a few hero props; enemy meshes reused; document replacement seams. No multi-day art polish.
