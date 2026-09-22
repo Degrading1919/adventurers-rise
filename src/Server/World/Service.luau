@@ -12,12 +12,48 @@
 -- carry a repository RuntimeId as authority and deliberately have no Humanoid, so there is no second
 -- health/combat system.
 
+local EnemyAI = require(script.Parent.EnemyAI)
+
 local ENEMY_SPAWN_TAG = "AR_EnemySpawn"
+-- A territory volume: a tagged BasePart whose position is the population's home/leash anchor and whose
+-- attributes declare which archetype lives there, how many, and how far they roam. Territories are the
+-- data-driven evolution of the single-enemy spawn marker -- they localize populations to a region.
+local ENEMY_TERRITORY_TAG = "AR_EnemyTerritory"
 local ENEMY_TAG = "AR_Enemy"
 local GATHERING_NODE_TAG = "AR_GatheringNode"
 local TRAINING_STATION_TAG = "AR_TrainingStation"
 local FORGE_TAG = "AR_Forge"
 local SHOP_TAG = "AR_Shop"
+
+-- Territory marker attribute keys (stable identifiers, authored in the Studio scene).
+local ATTR_TERRITORY_ID = "TerritoryId"
+local ATTR_TERRITORY_RADIUS = "Radius"
+local ATTR_TERRITORY_POPULATION = "Population"
+-- Optional per-territory movement-tuning overrides (any of EnemyAI.Config's keys); absent => defaults.
+local TERRITORY_TUNING_KEYS = { "AggroRadius", "DeaggroRadius", "LeashRadius", "RoamRadius", "RoamSpeed", "ChaseSpeed", "ArriveRadius", "RoamPauseMin", "RoamPauseMax", "AttackRange" }
+
+-- Presentation-only display names for the billboard label (stable IDs stay authoritative). A missing
+-- id falls back to a neutral word rather than mislabeling a new archetype as a Goblin.
+local ENEMY_DISPLAY_NAMES: { [string]: string } = {
+	enemy_goblin = "Goblin",
+	enemy_goblin_chieftain = "Goblin Chieftain",
+	enemy_wolf = "Wolf",
+}
+
+-- Territory defaults when a marker omits an attribute, and how far past a territory's edge an enemy may
+-- chase before leashing home (added to the territory radius unless the marker overrides LeashRadius).
+local DEFAULT_TERRITORY_RADIUS = 30
+local DEFAULT_TERRITORY_POPULATION = 3
+local TERRITORY_LEASH_BUFFER = 40
+
+-- An enemy whose territory has no player within this range (studs) sleeps: its movement brain is
+-- skipped entirely until a player approaches. Keeps far, unwatched populations free on the server.
+local ACTIVATION_RADIUS = 220
+-- Gentle vertical bob applied while an enemy is moving, to read as locomotion without an animated rig.
+local WALK_BOB_AMPLITUDE = 0.35
+-- Degrees to rotate a facing enemy so the model's visible front points where it heads. The provisional
+-- meshes' authored front is not -Z, so this corrects it; verified against the live models in Studio.
+local FACING_YAW_OFFSET = 0
 
 -- Attribute keys (stable identifiers, never display names).
 local ATTR_ENEMY_DEFINITION_ID = "EnemyDefinitionId"
@@ -60,6 +96,9 @@ export type EnemyCombat = {
 	read ResolveAttack: (number, any) -> (any?, string?),
 	read OnSpawn: (number) -> (),
 	read ClearEnemy: (string) -> (),
+	-- Read-only "would this enemy chase this player" predicate, so movement aggression uses the same
+	-- conditional-aggression rule as combat (an enemy never pursues a player it would not attack).
+	read Engages: (number, any) -> boolean,
 }
 
 export type Runtime = {
@@ -70,6 +109,10 @@ export type Runtime = {
 	read Warn: (string) -> (),
 	read Spawn: ((...any) -> (), ...any) -> (),
 	read Wait: (number) -> (),
+	-- Optional per-frame signal (RunService.Heartbeat) that drives smooth, server-authoritative enemy
+	-- movement. When absent (as in headless tests) enemies simply do not roam -- every other behaviour,
+	-- including combat, death, and respawn, is unaffected, so the movement layer is purely additive.
+	read Heartbeat: RBXScriptSignal?,
 	-- Optional presentation seam: a container of production enemy models keyed by EnemyDefinitionId
 	-- (e.g. ServerStorage.AR_Assets.Enemies.enemy_goblin). When a matching template exists it is cloned
 	-- as the enemy's physical body; otherwise a provisional coloured box is built. The template is pure
@@ -87,6 +130,19 @@ type EnemyRecord = {
 	-- The BaseParts faded on death and restored on respawn. Captured once at build time as a plain
 	-- array so the death/respawn path never needs to re-walk the instance tree.
 	FadeParts: { BasePart },
+	-- ----- Living-world movement state -----
+	-- Territory home (leash anchor + roam centre) and its radius; the grounded pivot height to keep the
+	-- body on the floor as it moves; the base (un-bobbed) world position the AI reasons about; the
+	-- resolved per-territory movement tuning; the behavioural memory the pure state machine advances;
+	-- and a bob phase for the walk illusion. Home/Radius/Config are fixed for the territory; the rest
+	-- evolve every movement tick.
+	Home: Vector3,
+	Radius: number,
+	GroundY: number,
+	BasePosition: Vector3,
+	AIConfig: EnemyAI.Config,
+	AIMemory: EnemyAI.Memory,
+	BobPhase: number,
 }
 
 local Service = {}
@@ -185,7 +241,7 @@ function Service.New(runtime: Runtime)
 	end
 
 	local function enemyLabelText(definitionId: string, level: any): string
-		local displayName = if definitionId == "enemy_goblin_chieftain" then "Goblin Chieftain" else "Goblin"
+		local displayName = ENEMY_DISPLAY_NAMES[definitionId] or "Enemy"
 		return displayName .. " Lv" .. tostring(level)
 	end
 
@@ -377,10 +433,12 @@ function Service.New(runtime: Runtime)
 		label.Parent = billboard
 	end
 
-	-- Builds the physical enemy body at a marker and returns it plus the parts to fade on death. Uses
-	-- the injected production template when one exists, else the provisional box; either way the body
-	-- carries the RuntimeId/level attributes and the ENEMY_TAG, and never a Humanoid.
-	local function buildEnemyModel(marker: BasePart, definitionId: string, state: any, container: Folder): (Model, { BasePart })
+	-- Builds the physical enemy body seated at (marker + horizontal spawnOffset) and returns it, the
+	-- parts to fade on death, and the grounded pivot height Y (so the mover can keep the body on the
+	-- floor as it roams). Uses the injected production template when one exists, else the provisional
+	-- box; either way the body carries the RuntimeId/level attributes and the ENEMY_TAG, never a
+	-- Humanoid. spawnOffset lets a whole population share one territory marker at spread-out points.
+	local function buildEnemyModel(marker: BasePart, spawnOffset: Vector3, definitionId: string, state: any, container: Folder): (Model, { BasePart }, number)
 		local model: Model
 		local fadeParts: { BasePart } = {}
 		local labelHost: BasePart
@@ -398,6 +456,8 @@ function Service.New(runtime: Runtime)
 				end
 			end
 			local height = seatModelOnMarker(model, marker)
+			-- Spread this instance to its point within the territory, keeping it grounded.
+			model:PivotTo(model:GetPivot() + Vector3.new(spawnOffset.X, 0, spawnOffset.Z))
 			labelHost = model.PrimaryPart :: BasePart
 			labelOffset = height / 2 + 1.5
 		else
@@ -408,12 +468,15 @@ function Service.New(runtime: Runtime)
 			body.Name = "Body"
 			body.Anchored = true
 			body.CanCollide = false
+			-- Provisional silhouettes so archetypes read as distinct even without production art: a tall
+			-- red boss, a low elongated grey wolf, a green goblin/other.
 			local isBoss = definitionId == "enemy_goblin_chieftain"
-			body.Size = if isBoss then Vector3.new(6, 10, 6) else Vector3.new(3, 5, 3)
-			body.Color = if isBoss then Color3.fromRGB(120, 20, 20) else Color3.fromRGB(70, 130, 60)
+			local isWolf = definitionId == "enemy_wolf"
+			body.Size = if isBoss then Vector3.new(6, 10, 6) elseif isWolf then Vector3.new(2.6, 3, 5) else Vector3.new(3, 5, 3)
+			body.Color = if isBoss then Color3.fromRGB(120, 20, 20) elseif isWolf then Color3.fromRGB(85, 85, 95) else Color3.fromRGB(70, 130, 60)
 			body.Material = Enum.Material.SmoothPlastic
-			-- Sit the body on the marker so its center is above the floor.
-			body.CFrame = marker.CFrame + Vector3.new(0, body.Size.Y / 2, 0)
+			-- Sit the body on the marker (plus its territory offset) so its centre is above the floor.
+			body.CFrame = marker.CFrame + Vector3.new(spawnOffset.X, body.Size.Y / 2, spawnOffset.Z)
 			body.Parent = model
 			model.PrimaryPart = body
 			table.insert(fadeParts, body)
@@ -430,7 +493,30 @@ function Service.New(runtime: Runtime)
 		writeEnemyHealth(model, state)
 		runtime.Collection:AddTag(model, ENEMY_TAG)
 		model.Parent = container
-		return model, fadeParts
+		return model, fadeParts, model:GetPivot().Position.Y
+	end
+
+	-- A uniform-area random horizontal offset within a radius (server movement uses live math.random;
+	-- determinism is only needed for the pure EnemyAI unit tests, which inject their own RNG).
+	local function randomOffsetInRadius(radius: number): (number, number)
+		local angle = math.random() * 2 * math.pi
+		local r = math.sqrt(math.random()) * radius
+		return math.cos(angle) * r, math.sin(angle) * r
+	end
+
+	local function freshMemory(): EnemyAI.Memory
+		return { State = "Idle", RoamTarget = nil, PauseUntil = 0 }
+	end
+
+	-- Places an enemy at a fresh grounded point inside its territory and resets its behavioural brain.
+	-- Used at first spawn and on respawn, so a killed enemy returns to its region (never popping back at
+	-- the far-off spot where it died mid-chase) and populations don't all stack on one exact marker.
+	local function seatInTerritory(record: EnemyRecord)
+		local ox, oz = randomOffsetInRadius(record.Radius)
+		record.BasePosition = Vector3.new(record.Home.X + ox, record.GroundY, record.Home.Z + oz)
+		record.AIMemory = freshMemory()
+		record.BobPhase = 0
+		record.Model:PivotTo(CFrame.new(record.BasePosition))
 	end
 
 	local function rebindModel(record: EnemyRecord, state: any)
@@ -484,6 +570,8 @@ function Service.New(runtime: Runtime)
 			return
 		end
 		rebindModel(record, state)
+		-- Return to a fresh point inside the territory with a reset brain, rather than reviving in place.
+		seatInTerritory(record)
 		record.RespawnAt = nil
 	end
 
@@ -558,8 +646,109 @@ function Service.New(runtime: Runtime)
 		end
 	end
 
-	-- Spawns the provisional physical enemies at every tagged marker, creating one repository runtime
-	-- instance per marker and binding it to the physical model, then starts the shared death poll.
+	-- One shared, server-authoritative movement pass over every enemy, driven by Heartbeat. For each
+	-- awake enemy it asks the pure EnemyAI state machine what to do (roam / chase / return), then
+	-- kinematically steps the anchored body toward the intent, keeping it grounded, facing its heading,
+	-- with a gentle walk bob. Moving the model's pivot is the WHOLE integration: combat range, enemy
+	-- melee, and the client all read the live pivot, so they stay consistent for free. This owns no
+	-- gameplay outcome -- it never applies damage, awards XP, or decides who is hit; it only decides
+	-- where the body walks, and defers WHOM to chase to the same conditional-aggression rule combat uses.
+	local function movePass(dt: number, enemies: Enemies, enemyCombat: EnemyCombat)
+		if #records == 0 then
+			return
+		end
+		local players: { { UserId: number, Position: Vector3 } } = {}
+		for _, player in runtime.Players:GetPlayers() do
+			local character = player.Character
+			local root = character and character:FindFirstChild("HumanoidRootPart")
+			if root and root:IsA("BasePart") then
+				table.insert(players, { UserId = player.UserId, Position = root.Position })
+			end
+		end
+		local now = runtime.Clock()
+		for _, record in records do
+			if record.RespawnAt == nil and record.Model.PrimaryPart ~= nil then
+				local base = record.BasePosition
+				-- Sleep gate: skip the brain entirely when no player is within activation range at all.
+				local nearestAnyDist: number? = nil
+				for _, p in players do
+					local dx, dz = p.Position.X - base.X, p.Position.Z - base.Z
+					local d = math.sqrt(dx * dx + dz * dz)
+					if nearestAnyDist == nil or d < nearestAnyDist then
+						nearestAnyDist = d
+					end
+				end
+				if nearestAnyDist ~= nil and nearestAnyDist <= ACTIVATION_RADIUS then
+					-- Chase target = the nearest player this enemy would actually engage (conditional
+					-- aggression / provocation). Players it has outgrown are ignored by movement too, so it
+					-- never pursues someone it would not attack. Roaming/returning ignore players entirely.
+					local nearest: Vector3? = nil
+					local nearestDist: number? = nil
+					local snapshot = enemies.GetSnapshot(record.RuntimeId)
+					if snapshot and snapshot.Alive then
+						for _, p in players do
+							local dx, dz = p.Position.X - base.X, p.Position.Z - base.Z
+							local d = math.sqrt(dx * dx + dz * dz)
+							if (nearestDist == nil or d < nearestDist) and enemyCombat.Engages(p.UserId, snapshot) then
+								nearest = p.Position
+								nearestDist = d
+							end
+						end
+					end
+					local memory, intent = EnemyAI.Step(record.AIMemory, {
+						Home = record.Home,
+						Current = base,
+						Now = now,
+						NearestPlayer = nearest,
+						NearestPlayerDistance = nearestDist,
+						Config = record.AIConfig,
+						Random = math.random,
+					})
+					record.AIMemory = memory
+
+					local newBase = base
+					local moving = false
+					if intent.MoveTo ~= nil then
+						local target = intent.MoveTo :: Vector3
+						local dx, dz = target.X - base.X, target.Z - base.Z
+						local dist = math.sqrt(dx * dx + dz * dz)
+						if dist > 1e-3 then
+							local step = math.min(intent.Speed * dt, dist)
+							newBase = Vector3.new(base.X + dx / dist * step, record.GroundY, base.Z + dz / dist * step)
+							moving = step > 1e-3
+						end
+					end
+					record.BasePosition = newBase
+
+					if moving then
+						record.BobPhase += dt * intent.Speed * 0.6
+					end
+					local bobY = if moving then math.abs(math.sin(record.BobPhase)) * WALK_BOB_AMPLITUDE else 0
+					local renderPos = Vector3.new(newBase.X, record.GroundY + bobY, newBase.Z)
+
+					local cf: CFrame? = nil
+					local facePos = intent.Face
+					if facePos ~= nil then
+						local fx = (facePos :: Vector3).X - renderPos.X
+						local fz = (facePos :: Vector3).Z - renderPos.Z
+						if fx * fx + fz * fz > 1e-4 then
+							cf = CFrame.lookAt(renderPos, Vector3.new((facePos :: Vector3).X, renderPos.Y, (facePos :: Vector3).Z))
+								* CFrame.Angles(0, math.rad(FACING_YAW_OFFSET), 0)
+						end
+					end
+					if cf == nil then
+						-- No new heading: keep the current facing, only translate (and bob).
+						cf = record.Model:GetPivot().Rotation + renderPos
+					end
+					record.Model:PivotTo(cf)
+				end
+			end
+		end
+	end
+
+	-- Spawns the enemy populations for every territory (and any legacy single-spawn marker), binds each
+	-- to a repository runtime instance, starts the shared death poll, and -- when a Heartbeat is
+	-- available -- the server-authoritative movement loop.
 	function service.Start(enemies: Enemies, enemyCombat: EnemyCombat)
 		assert(
 			type(enemies) == "table"
@@ -572,7 +761,8 @@ function Service.New(runtime: Runtime)
 			type(enemyCombat) == "table"
 				and type(enemyCombat.ResolveAttack) == "function"
 				and type(enemyCombat.OnSpawn) == "function"
-				and type(enemyCombat.ClearEnemy) == "function",
+				and type(enemyCombat.ClearEnemy) == "function"
+				and type(enemyCombat.Engages) == "function",
 			"World.Start requires the enemy-combat resolver"
 		)
 
@@ -597,27 +787,80 @@ function Service.New(runtime: Runtime)
 			container = created
 		end
 
+		-- Creates one enemy of definitionId belonging to a territory (home + radius + movement config),
+		-- seated at a random point inside it, and registers its record with full movement state.
+		local function spawnEnemy(definitionId: string, marker: BasePart, home: Vector3, radius: number, config: EnemyAI.Config)
+			local state, reason = enemies.Create(definitionId)
+			if not state then
+				runtime.Warn(("[World] Enemy create failed for %s: %s"):format(definitionId, tostring(reason)))
+				return
+			end
+			local ox, oz = randomOffsetInRadius(radius)
+			local model, fadeParts, groundY = buildEnemyModel(marker, Vector3.new(ox, 0, oz), definitionId, state, container :: Folder)
+			enemyModels[state.RuntimeId] = model
+			local pivot = model:GetPivot().Position
+			table.insert(records, {
+				Model = model,
+				Marker = marker,
+				DefinitionId = definitionId,
+				RuntimeId = state.RuntimeId,
+				RespawnAt = nil,
+				FadeParts = fadeParts,
+				Home = home,
+				Radius = radius,
+				GroundY = groundY,
+				BasePosition = Vector3.new(pivot.X, groundY, pivot.Z),
+				AIConfig = config,
+				AIMemory = freshMemory(),
+				BobPhase = 0,
+			})
+		end
+
+		-- Territories: a marker declares which archetype lives there, how many, and how far they roam.
+		-- Each territory maintains a localized population that roams within (and leashes back to) it.
+		for _, marker in runtime.Collection:GetTagged(ENEMY_TERRITORY_TAG) do
+			if marker:IsA("BasePart") and isWorldContent(marker) then
+				local definitionId = marker:GetAttribute(ATTR_ENEMY_DEFINITION_ID)
+				if type(definitionId) ~= "string" or definitionId == "" then
+					runtime.Warn(("[World] Territory %s has no %s attribute"):format(marker:GetFullName(), ATTR_ENEMY_DEFINITION_ID))
+				else
+					local radiusAttr = marker:GetAttribute(ATTR_TERRITORY_RADIUS)
+					local radius = if type(radiusAttr) == "number" and radiusAttr > 0 then radiusAttr else DEFAULT_TERRITORY_RADIUS
+					local populationAttr = marker:GetAttribute(ATTR_TERRITORY_POPULATION)
+					local population = if type(populationAttr) == "number" and populationAttr >= 1 then math.floor(populationAttr) else DEFAULT_TERRITORY_POPULATION
+					-- Roam covers the territory and leash extends a little past its edge, unless the marker
+					-- overrides them explicitly; every other tuning value comes from EnemyAI defaults.
+					local overrides: { [string]: number } = {}
+					for _, key in TERRITORY_TUNING_KEYS do
+						local value = marker:GetAttribute(key)
+						if type(value) == "number" then
+							overrides[key] = value
+						end
+					end
+					if overrides.RoamRadius == nil then
+						overrides.RoamRadius = radius
+					end
+					if overrides.LeashRadius == nil then
+						overrides.LeashRadius = radius + TERRITORY_LEASH_BUFFER
+					end
+					local config = EnemyAI.ResolveConfig(overrides)
+					local home = marker.Position
+					for _ = 1, population do
+						spawnEnemy(definitionId, marker, home, radius, config)
+					end
+				end
+			end
+		end
+
+		-- Legacy single-enemy spawn markers still work: each becomes a one-member territory anchored at
+		-- the marker, roaming with default tuning. (New world content uses territories instead.)
 		for _, marker in runtime.Collection:GetTagged(ENEMY_SPAWN_TAG) do
 			if marker:IsA("BasePart") and isWorldContent(marker) then
 				local definitionId = marker:GetAttribute(ATTR_ENEMY_DEFINITION_ID)
 				if type(definitionId) ~= "string" or definitionId == "" then
 					runtime.Warn(("[World] Enemy spawn marker %s has no %s attribute"):format(marker:GetFullName(), ATTR_ENEMY_DEFINITION_ID))
 				else
-					local state, reason = enemies.Create(definitionId)
-					if not state then
-						runtime.Warn(("[World] Enemy create failed for %s: %s"):format(definitionId, tostring(reason)))
-					else
-						local model, fadeParts = buildEnemyModel(marker, definitionId, state, container :: Folder)
-						enemyModels[state.RuntimeId] = model
-						table.insert(records, {
-							Model = model,
-							Marker = marker,
-							DefinitionId = definitionId,
-							RuntimeId = state.RuntimeId,
-							RespawnAt = nil,
-							FadeParts = fadeParts,
-						})
-					end
+					spawnEnemy(definitionId, marker, marker.Position, 0, EnemyAI.ResolveConfig(nil))
 				end
 			end
 		end
@@ -629,6 +872,14 @@ function Service.New(runtime: Runtime)
 				attackPass(enemies, enemyCombat)
 			end
 		end)
+
+		-- Server-authoritative movement, when a per-frame signal is available (Studio runtime). Absent in
+		-- headless tests, so enemies there stay put and only their combat/lifecycle facts are asserted.
+		if runtime.Heartbeat ~= nil then
+			runtime.Heartbeat:Connect(function(dt: number)
+				movePass(dt, enemies, enemyCombat)
+			end)
+		end
 	end
 
 	-- Read-only diagnostic view of the runtime-to-instance binding, for verification. Never a gameplay

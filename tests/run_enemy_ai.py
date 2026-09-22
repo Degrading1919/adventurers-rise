@@ -1,14 +1,8 @@
-"""Run World's target-selection and enemy-lifecycle behavior checks.
+"""Run the pure enemy movement/behaviour state-machine (World/EnemyAI) behaviour checks.
 
-World is Studio-context: its module body references Roblox instance types (Players, Model, BasePart,
-...), so it is not standalone type-analyzable (same reason it is excluded from the composition
-analyzer set). Its syntax is still covered by the whole-source luau-compile below.
-
-Behaviorally, World.spec exercises the pure, Roblox-free World.SelectAttackTarget directly, and drives
-World.New/Start against a minimal in-spec stub of the Roblox surface the module touches to assert the
-enemy-lifecycle facts (Start's runtime-contract validation, and provocation cleared at an enemy's
-death). A live two-player Studio session still cannot be driven headlessly, so multiplayer targeting
-across real players remains covered by SelectAttackTarget's deterministic checks plus Studio playtest.
+EnemyAI owns no Roblox instances -- it is a deterministic decision function -- so it is fully testable
+headlessly. Its syntax is covered by the whole-source luau-compile below; the behaviour is exercised by
+EnemyAI.spec against a tiny Vector3 stub, the same style used for the other extracted-pure modules.
 """
 
 import argparse
@@ -29,7 +23,6 @@ def main():
     subprocess.run([args.compiler, "--null", *map(str, sources)], check=True, cwd=root)
 
     modules = {
-        "WorldService": root / "src/Server/World/Service.luau",
         "EnemyAI": root / "src/Server/World/EnemyAI.luau",
     }
     wrappers = ["local loaders = {}"]
@@ -48,10 +41,10 @@ local function moduleRequire(name)
 end
 local function runTests(require)
 ''')
-    wrappers.append((root / "tests/World.spec.luau").read_text(encoding="utf-8"))
+    wrappers.append((root / "tests/EnemyAI.spec.luau").read_text(encoding="utf-8"))
     wrappers.append("end\nrunTests(moduleRequire)\n")
 
-    with tempfile.TemporaryDirectory(prefix=".world-", dir=root / "tests") as directory:
+    with tempfile.TemporaryDirectory(prefix=".enemyai-", dir=root / "tests") as directory:
         temporary = Path(directory)
         assert temporary.resolve().is_relative_to(root / "tests")
         bundle = temporary / "behavior.luau"

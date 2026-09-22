@@ -86,6 +86,9 @@ end
 -- normal Goblin roll, and it reuses the same Enemy runtime rather than a separate boss system.
 local definitions: { [string]: Definition } = {
 	[EnemyIds.Goblin] = definition(EnemyIds.Goblin, "Goblin", levelRange(3, 8), scaling(30, 6, 4, 1, 3, 1), aggression(-2)),
+	-- Wolf: a lower-tier, fragile, fast pack predator occupying its own territory (a distinct
+	-- population from the goblins). Provisional balance, like every other value here.
+	[EnemyIds.Wolf] = definition(EnemyIds.Wolf, "Wolf", levelRange(2, 5), scaling(18, 4, 3, 1, 2, 1), aggression(-4)),
 	[EnemyIds.GoblinChieftain] = definition(
 		EnemyIds.GoblinChieftain,
 		"Goblin Chieftain",

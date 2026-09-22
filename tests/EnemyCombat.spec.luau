@@ -89,6 +89,24 @@ test("an appropriate/underpowered player is auto-engaged: damage applied and Def
 	equal(awards[1].amount, 2)
 end)
 
+test("Engages mirrors conditional aggression for the movement layer, with no side effects", function()
+	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
+	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 5 } })
+	local ec = EnemyCombat.New(health, skills, CONFIG)
+	-- Appropriate player is engaged (would be chased), and the predicate applies no damage / no XP.
+	equal(ec.Engages(7, { RuntimeId = "e1", DefinitionId = EnemyIds.Goblin, Level = 5 }), true)
+	equal(#healthCalls.apply, 0)
+	equal(#awards, 0)
+	-- A player who has substantially outgrown the enemy is not engaged while passive...
+	local overEc = EnemyCombat.New(fakeHealth({ alive = true }), fakeSkills({ levels = { [SkillIds.Melee] = 30 } }), CONFIG)
+	equal(overEc.Engages(7, { RuntimeId = "e2", DefinitionId = EnemyIds.Goblin, Level = 5 }), false)
+	-- ...but provoking the enemy re-engages it, exactly like retaliation in combat.
+	overEc.RecordProvocation("e2", 7)
+	equal(overEc.Engages(7, { RuntimeId = "e2", DefinitionId = EnemyIds.Goblin, Level = 5 }), true)
+	-- Malformed enemy state is never engaged.
+	equal(ec.Engages(7, { RuntimeId = "", DefinitionId = EnemyIds.Goblin, Level = 5 }), false)
+end)
+
 test("an overleveled player is ignored while passive (no damage, no XP)", function()
 	local health, healthCalls = fakeHealth({ alive = true, result = aliveResult })
 	local skills, awards = fakeSkills({ levels = { [SkillIds.Melee] = 36, [SkillIds.Defense] = 5 } })

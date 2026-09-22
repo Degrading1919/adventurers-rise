@@ -59,6 +59,8 @@ local world = World.New({
 	Warn = warn,
 	Spawn = function(callback, ...) task.spawn(callback, ...) end,
 	Wait = function(seconds) task.wait(seconds) end,
+	-- Drives the server-authoritative enemy movement loop (roaming / chasing / leashing).
+	Heartbeat = RunService.Heartbeat,
 	EnemyTemplates = enemyTemplates,
 })
 local worldAdapters = {
