@@ -2,7 +2,6 @@
 
 local Shared = game:GetService("ReplicatedStorage").Shared
 local SkillIds = require(Shared.SkillIds)
-local AscensionIds = require(Shared.AscensionIds)
 local StationDefinitions = require(script.Parent.Parent.Plots.StationDefinitions)
 local ShopCatalog = require(script.Parent.Parent.Economy.ShopCatalog)
 local CraftingDefinitions = require(script.Parent.Parent.Crafting.Definitions)
@@ -24,7 +23,8 @@ export type Plots = { read GetStation: (number, string) -> (any?, string?) }
 export type Mastery = { read GetState: (number, string) -> (any?, string?) }
 export type Ascension = {
 	read GetState: (number) -> (any?, string?),
-	read EvaluateRequirements: (number, string) -> (any?, string?),
+	-- Progress toward the player's NEXT rank; returns (nil, nil) at the top of the ladder.
+	read EvaluateNextRank: (number) -> (any?, string?),
 }
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
 export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
@@ -123,9 +123,11 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 		if not ascensionState then
 			return nil, ascensionReason
 		end
-		local adeptProgress, progressReason = services.Ascension.EvaluateRequirements(userId, AscensionIds.Adept)
-		if not adeptProgress then
-			return nil, progressReason
+		-- Forward-looking Ascension goal: progress toward the NEXT rank in the chain, or nil once the
+		-- player is at the top. (nil, nil) is the top-of-ladder signal, not an error.
+		local nextRank, nextRankReason = services.Ascension.EvaluateNextRank(userId)
+		if nextRankReason then
+			return nil, nextRankReason
 		end
 
 		-- OfflineTraining.GetFocus returns (nil, nil) -- not an error -- when no focus is selected.
@@ -219,7 +221,9 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			Mastery = mastery,
 			Ascension = {
 				RankId = (ascensionState :: any).RankId,
-				AdeptProgress = adeptProgress,
+				RankDisplayName = (ascensionState :: any).DisplayName,
+				-- The next rank + its live 4-category requirement progress, or nil at max rank.
+				NextRank = nextRank,
 			},
 			Health = health,
 			Defense = { DamageReduction = defense.Total, ArmorDamageReduction = defense.Armor },

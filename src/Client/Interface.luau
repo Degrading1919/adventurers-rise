@@ -100,7 +100,7 @@ function Interface.New(player: Player)
 		Upgrade = function() end,
 		ForgeCraft = function(_recipeId: string, _request: { Quantity: number?, Max: boolean? }?) end,
 		Equip = function(_slotId: string, _instanceId: string) end,
-		Ascend = function() end,
+		Ascend = function(_rankId: string) end,
 		AcknowledgeStarterFocus = function() end,
 		SetOfflineFocus = function(_skillId: string) end,
 		SelectMastery = function(_skillId: string, _nodeId: string) end,
@@ -360,7 +360,7 @@ function Interface.New(player: Player)
 
 	local forgePanel, forgeContent = panel("Forge — Smithing", 360)
 	local gearPanel, gearContent = panel("Gear — Inventory")
-	local ascendPanel, ascendContent = panel("Ascension — Adept")
+	local ascendPanel, ascendContent = panel("Ascension")
 	local offlinePanel, offlineContent = panel("Offline Training")
 	local shopPanel, shopContent = panel("Shop", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
@@ -655,12 +655,23 @@ function Interface.New(player: Player)
 	-- ---- Ascend panel ----
 	local ascendList = make("Frame", { Size = UDim2.new(1, 0, 1, -46), BackgroundTransparency = 1 }, ascendContent)
 	make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, ascendList)
-	local ascendActionBtn = make("TextButton", {
+	-- Readable names for the boss-milestone requirement, keyed by the ProgressionFlag id the server
+		-- reports; generalised so each rank can require a different boss without a code change.
+		local MILESTONE_LABELS: { [string]: string } = {
+			flag_boss_goblin_chieftain_defeated = "Goblin Chieftain defeated",
+			flag_boss_bandit_warlord_defeated = "Bandit Warlord defeated",
+		}
+		-- The rank the Ascend button currently targets (the player's next rank), refreshed by renderAscend
+		-- so a click always ascends toward the right rank without the client hardcoding one.
+		local ascendTargetRankId: string? = nil
+		local ascendActionBtn = make("TextButton", {
 		Size = UDim2.new(1, 0, 0, 38), Position = UDim2.new(0, 0, 1, -38), BackgroundColor3 = COLORS.Button,
-		Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = COLORS.Text, Text = "Ascend to Adept",
+		Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = COLORS.Text, Text = "Ascend",
 	}, ascendContent)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, ascendActionBtn)
-	ascendActionBtn.Activated:Connect(function() handlers.Ascend() end)
+	ascendActionBtn.Activated:Connect(function()
+		if ascendTargetRankId then handlers.Ascend(ascendTargetRankId) end
+	end)
 
 	local function reqLine(text: string, met: boolean, order2: number)
 		make("TextLabel", {
@@ -675,8 +686,9 @@ function Interface.New(player: Player)
 			if child:IsA("TextLabel") then child:Destroy() end
 		end
 		if not lastState or not lastState.Ascension then return end
-		local rankId = lastState.Ascension.RankId
-		local p = lastState.Ascension.AdeptProgress
+		local asc = lastState.Ascension
+		local nextRank = asc.NextRank
+			local p = if type(nextRank) == "table" then nextRank.Progress else nil
 		local order2 = 0
 		if p then
 			for _, alt in p.Offense.Alternatives do
@@ -688,11 +700,11 @@ function Interface.New(player: Player)
 				reqLine(("%s %d/%d"):format(SKILL_LABELS[th.SkillId] or th.SkillId, th.CurrentLevel, th.RequiredLevel), th.Met, order2)
 				order2 += 1
 			end
-			reqLine("Goblin Chieftain defeated", p.BossMilestone.Met, order2); order2 += 1
+			reqLine(MILESTONE_LABELS[p.BossMilestone.MilestoneId] or "Boss milestone", p.BossMilestone.Met, order2); order2 += 1
 		end
-		local alreadyAdept = rankId ~= nil and rankId ~= "ascension_adventurer"
-		local canAscend = (not alreadyAdept) and p ~= nil and p.Met == true
-		ascendActionBtn.Text = if alreadyAdept then "Rank: Adept" else (if canAscend then "Ascend to Adept" else "Requirements not met")
+		ascendTargetRankId = if type(nextRank) == "table" then nextRank.RankId else nil
+		local canAscend = p ~= nil and p.Met == true
+		ascendActionBtn.Text = if type(nextRank) ~= "table" then ("Rank: " .. (asc.RankDisplayName or "—") .. " (max)") elseif canAscend then ("Ascend to " .. nextRank.DisplayName) else "Requirements not met"
 		ascendActionBtn.BackgroundColor3 = if canAscend then COLORS.ButtonOn else COLORS.Button
 		ascendActionBtn.Active = canAscend
 		ascendActionBtn.AutoButtonColor = canAscend

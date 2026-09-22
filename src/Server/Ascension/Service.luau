@@ -13,6 +13,7 @@ export type Skills = {
 }
 export type State = {
 	RankId: string,
+	DisplayName: string,
 }
 export type SkillThresholdResult = {
 	SkillId: string,
@@ -43,6 +44,13 @@ export type RequirementEvaluation = {
 }
 export type AscendResult = {
 	RankId: string,
+}
+-- Forward-looking Ascension goal: the rank the player can work toward next, with its live requirement
+-- evaluation. Nil (returned as (nil, nil)) when the player is already at the top of the ladder.
+export type NextRankView = {
+	RankId: string,
+	DisplayName: string,
+	Progress: RequirementEvaluation,
 }
 
 -- Trusted server systems (a shared or personal boss encounter) call RecordBossMilestone /
@@ -97,7 +105,9 @@ function Service.New(playerData: PlayerData, skills: Skills)
 		if not ascension then
 			return nil, ascensionReason
 		end
-		return { RankId = ascension.RankId }, nil
+		-- ascensionFor already proved the rank id is a known definition.
+		local rank = Definitions.ById[ascension.RankId]
+		return { RankId = ascension.RankId, DisplayName = rank.DisplayName }, nil
 	end
 
 	function service.GetState(userId: number): (State?, string?)
@@ -194,6 +204,46 @@ function Service.New(playerData: PlayerData, skills: Skills)
 			return nil, "NotReady"
 		end
 		return service.EvaluateRequirementsFromData(data, rankId)
+	end
+
+	-- The rank that chains directly from `rankId` (its PreviousRankId points back to it), or nil at the
+	-- top of the ladder. Definitions are validated as a linear chain, so at most one rank matches.
+	local function nextRankAfter(rankId: string): Definitions.RankDefinition?
+		for _, candidate in Definitions.ById do
+			if candidate.PreviousRankId == rankId then
+				return candidate
+			end
+		end
+		return nil
+	end
+
+	-- Progress toward the player's NEXT rank, so a single forward-looking Ascension goal can be surfaced
+	-- without hardcoding a rank id. Returns (nil, nil) -- not an error -- when already at the max rank.
+	function service.EvaluateNextRankFromData(data: any): (NextRankView?, string?)
+		local ascension, ascensionReason = ascensionFor(data)
+		if not ascension then
+			return nil, ascensionReason
+		end
+		local nextRank = nextRankAfter(ascension.RankId)
+		if not nextRank then
+			return nil, nil
+		end
+		local progress, progressReason = service.EvaluateRequirementsFromData(data, nextRank.Id)
+		if not progress then
+			return nil, progressReason
+		end
+		return { RankId = nextRank.Id, DisplayName = nextRank.DisplayName, Progress = progress }, nil
+	end
+
+	function service.EvaluateNextRank(userId: number): (NextRankView?, string?)
+		if not validUserId(userId) then
+			return nil, "InvalidUserId"
+		end
+		local data = playerData.GetSnapshot(userId)
+		if not data then
+			return nil, "NotReady"
+		end
+		return service.EvaluateNextRankFromData(data)
 	end
 
 	function service.Ascend(userId: number, targetRankId: string): (AscendResult?, string?)

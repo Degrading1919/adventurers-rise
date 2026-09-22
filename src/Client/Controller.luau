@@ -12,7 +12,6 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local RequestIds = require(Shared:WaitForChild("RequestIds"))
 local GatheringNodeIds = require(Shared:WaitForChild("GatheringNodeIds"))
-local AscensionIds = require(Shared:WaitForChild("AscensionIds"))
 local EventIds = require(Shared:WaitForChild("EventIds"))
 local RegionDefinitions = require(Shared:WaitForChild("RegionDefinitions"))
 
@@ -584,9 +583,12 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	end
 
 	-- ===== Ascend =====
-	iface.Handlers.Ascend = function()
-		local ok, _, reason = net.Request(RequestIds.AscensionAscend, { RankId = AscensionIds.Adept })
-		iface.SetStatus(if ok then "Ascended to Adept!" else ("Ascend: " .. reasonText(reason)))
+	iface.Handlers.Ascend = function(rankId: string)
+		if type(rankId) ~= "string" or rankId == "" then
+			return
+		end
+		local ok, _, reason = net.Request(RequestIds.AscensionAscend, { RankId = rankId })
+		iface.SetStatus(if ok then "Ascended!" else ("Ascend: " .. reasonText(reason)))
 		refresh()
 	end
 

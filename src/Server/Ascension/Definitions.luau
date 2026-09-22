@@ -91,6 +91,21 @@ local definitions: { [string]: RankDefinition } = {
 			ProgressionFlagIds.GoblinChieftainDefeated
 		)
 	),
+	-- Vanguard (Ascension II): the mid-game rank gate. Thresholds sit meaningfully above Adept and are
+	-- tuned to the content built for this region — the steel production tier (Mining/Smithing) and the
+	-- second boss (Bandit Warlord). Reaching it means the player has genuinely worked the whole loop:
+	-- fought up the melee ladder, hardened Defense, mined+smithed into steel, and beaten the Warlord.
+	[AscensionIds.Vanguard] = rank(
+		AscensionIds.Vanguard,
+		"Vanguard",
+		AscensionIds.Adept,
+		requirements(
+			offense({ skillThreshold(SkillIds.Melee, 15) }),
+			skillThreshold(SkillIds.Defense, 12),
+			overallSkilling({ skillThreshold(SkillIds.Mining, 8), skillThreshold(SkillIds.Smithing, 10) }),
+			ProgressionFlagIds.BanditWarlordDefeated
+		)
+	),
 }
 
 local function validSkillThreshold(value: any): boolean

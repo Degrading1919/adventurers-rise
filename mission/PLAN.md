@@ -12,14 +12,18 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phase 1 & 2 DONE. Phase 3 DONE + Studio-verified — iron+steel gear ladder & 2nd resource (Coal) live (22 suites green). Next: Phase-3 evaluator, then Phase 4.
+## CURRENT PHASE: Phases 1–3 DONE + evaluator-cleared. Now in Phase 4 (progression breadth + discovery).
+Phase 3 close-out: independent evaluator re-graded after the legibility fix cycle — criterion 5 = 4, 8 = 4, 9 = 4 (all ≥4). **VERDICT: advance to Phase 4.** Tracked debt to Phase 5 (non-blocking): armor BODY visual (EquipmentVisuals seam ready), a visceral harder-content signal, done: de-dup 0.9 clamp (EnemyCombat now exports MaxIncomingDamageReduction).
 Phase 3 approach (DONE for iron tier): Head/Body/Legs slots + an armor damage-reduction stat folded into the EXISTING EnemyCombat `IncomingDamageReduction` slot via the Composition defense-modifier provider (so EnemyCombat itself is unchanged — least-regression). Iron set (helm 0.04 / body 0.07 / legs 0.05 = 0.16) craftable from Iron Bars via Smithing (helm Lv4 / legs Lv6 / body Lv7). Gear panel + Forge are data-driven so armor appears/equips automatically (added ITEM_LABELS + SLOT_LABELS). EquipmentVisuals iterates only Weapon/Tool → armor has no character visual yet (clean seam). New Composition test proves 16% reduction through the real pipeline.
 
-## NEXT ACTION — Phase-3 close-out → Phase 4
-Phase 3 core is DONE + Studio-verified: iron+steel weapon/armour ladder, 2nd resource (Coal), two-input smelting, generic multi-node mining. Remaining:
-1. **Independent Phase-3 evaluator** (subagent that did NOT implement it): grade criterion 5 (weapons AND armour tiers that visibly ease/gate harder areas) + 8 (gather→produce chains) + 9 (visible progress / reasons to continue) against the code + the live evidence recorded in PROGRESS. Feed findings into a fix cycle before Phase 4. (Watch for: is the steel tier reachable in a reasonable session? does the player SEE armour's benefit? is coal's danger-gating fair at Mining Lv3?)
-2. **(Optional, evaluator-dependent) legibility:** surface an armour/defense-reduction readout in the read model + Gear panel so the mitigation is visible (addresses "visibly eases"); consider a shop path for gear.
-3. **Then Phase 4 — progression breadth + discovery:** more Mastery nodes; next Ascension rank (Adept→Vanguard, docs' 4-category reqs); discoverable POI objectives + first-visit rewards; map/compass UI. (Stretch: Woodcutting+Ranged 2nd combat pillar.)
+## NEXT ACTION — Phase 4 (progression breadth + discovery)
+Sequence into verify-per-slice sub-slices (implement → test → Studio-verify → evaluator at phase end):
+- **4a — Ascension → Vanguard + next-rank progress (DO FIRST):** add the Vanguard rank on the existing data-driven Ascension system (`Ascension/Definitions` + `AscensionIds`), PreviousRankId=Adept, requirements reusing what's already built: Offense=Melee higher (~15), Defense (~12), OverallSkilling=Mining+Smithing at the steel-tier levels (~8 each), BossMilestone=`BanditWarlordDefeated` (the 2nd boss from Phase 2 — ties the end-game goal to real content). Generalize `ReadModel` to evaluate/surface progress toward the player's NEXT rank (it currently hardcodes Adept) so both ranks display. Client Ascend panel shows the next rank + its 4-category progress. Tests: Ascension.spec (Vanguard chain/reqs), Composition read-model next-rank.
+- **4b — Discovery/POIs + map or compass:** first-visit zone/POI discovery → reward + log entry (server-authoritative flag + read-model surface); a minimal region map or compass pointing to zones/objectives (addresses the evaluator's recurring "no map/region-goal surface" note; helps criteria 6 & 9).
+- **4c — More Mastery nodes:** deepen per-skill trees so leveling keeps offering choices (criterion 4).
+- Stretch: Woodcutting+Ranged as a 2nd combat/gathering pillar. Independent evaluator at Phase-4 end (grade criteria 4, 6, 9).
+
+Live-playtest tooling note (unchanged): drive checks via `ReplicatedStorage.Remotes.Request:InvokeServer(RequestIds.*, payload)` (Client datamodel) + in-engine `require` (Server); MCP `_G` is sandboxed from the running server, so full hands-on high-level loops need a pre-leveled dev-store player.
 
 Note on live playtest tooling: the MCP `execute_luau` runs in a Luau state sandboxed from the running server's `_G`, so the Bootstrap `_G.__AdventurersRiseServer` debug seam is NOT reachable to seed PlayerData. Drive live checks through the real client RemoteFunction `ReplicatedStorage.Remotes.Request:InvokeServer(RequestIds.*, payload)` (Client datamodel) and in-engine `require` of synced modules (Server datamodel). Full hands-on loops need a dev-store player already leveled/stocked.
 

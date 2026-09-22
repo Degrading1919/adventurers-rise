@@ -1381,7 +1381,10 @@ test("the state read model contains the intended player-facing data and omits in
 	assert(state.PlotStations["station_training_melee"] ~= nil)
 	assert(state.Mastery[SkillIds.Melee] ~= nil)
 	assert(state.Ascension.RankId ~= nil)
-	assert(state.Ascension.AdeptProgress ~= nil)
+	assert(state.Ascension.RankDisplayName ~= nil)
+	-- A fresh Adventurer's next rank is Adept, with its live 4-category requirement progress.
+	assert(state.Ascension.NextRank ~= nil and state.Ascension.NextRank.RankId == AscensionIds.Adept)
+	assert(state.Ascension.NextRank.Progress ~= nil and state.Ascension.NextRank.Progress.RankId == AscensionIds.Adept)
 	assert(state.Health ~= nil and state.Health.Health ~= nil and state.Health.MaxHealth ~= nil)
 	assert(state.Shop ~= nil and state.Shop.Id == "shop_hub" and type(state.Shop.Entries) == "table")
 	assert(type(state.Recipes) == "table" and #state.Recipes > 0)
