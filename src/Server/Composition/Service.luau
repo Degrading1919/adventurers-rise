@@ -21,6 +21,7 @@ local MasteryService = require(script.Parent.Parent.Mastery.Service)
 local OfflineTrainingService = require(script.Parent.Parent.OfflineTraining.Service)
 local PlayerHealthService = require(script.Parent.Parent.PlayerHealth.Service)
 local OnboardingService = require(script.Parent.Parent.Onboarding.Service)
+local DiscoveryService = require(script.Parent.Parent.Discovery.Service)
 
 local RequestIds = require(game:GetService("ReplicatedStorage").Shared.RequestIds)
 local GatheringSessions = require(script.Parent.GatheringSessions)
@@ -68,6 +69,7 @@ export type WorldAdapters = {
 	read StationDistanceProvider: (number, string) -> (number?, string?),
 	read ForgeDistanceProvider: (number) -> (number?, string?),
 	read ShopDistanceProvider: (number, string) -> (number?, string?),
+	read PlayerZoneResolver: (number) -> (string?, string?),
 }
 export type RequestResult = {
 	Ok: boolean,
@@ -144,7 +146,8 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			and type(worldAdapters.GatheringNodeResolver) == "function"
 			and type(worldAdapters.StationDistanceProvider) == "function"
 			and type(worldAdapters.ForgeDistanceProvider) == "function"
-			and type(worldAdapters.ShopDistanceProvider) == "function",
+			and type(worldAdapters.ShopDistanceProvider) == "function"
+			and type(worldAdapters.PlayerZoneResolver) == "function",
 		"Composition requires injected world adapters"
 	)
 
@@ -327,6 +330,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- trusted writes that latch historical onboarding milestones. It needs only Skills (level reads) and
 	-- Economy (the atomic post-training Gold reward); everything else it reads from data.
 	local onboarding = OnboardingService.New(playerData, { Skills = skills, Economy = economy })
+	-- First-visit zone discovery: grants a one-time Gold reward when the player physically reaches a new
+	-- wilderness zone. Server-authoritative -- the zone is resolved from the real world position via the
+	-- injected adapter, never from client input -- and atomic (flag + Gold credit in one transaction).
+	local discovery = DiscoveryService.New(playerData, economy, worldAdapters.PlayerZoneResolver)
 
 	-- Onboarding first-ore milestone: recorded only from a real Mining settlement that actually awarded
 	-- Iron Ore (onboarding filters by item), so buying ore never satisfies it. Best-effort and pcall-
@@ -359,6 +366,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		PlayerHealth = playerHealth,
 		Onboarding = onboarding,
 		DefenseSummary = defenseSummary,
+		Discovery = discovery,
 	}, offlineReturnSummaries)
 
 	local composition = {}
@@ -380,6 +388,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		OfflineTraining = offlineTraining,
 		PlayerHealth = playerHealth,
 		Onboarding = onboarding,
+		Discovery = discovery,
 		-- World's heartbeat drives this to resolve enemy attacks; exposed here so Bootstrap can inject
 		-- it into World.Start alongside the Enemies service.
 		EnemyCombat = enemyCombat,
@@ -506,6 +515,13 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		-- The only onboarding write a client may trigger: record that the starter-focus framing was
 		-- confirmed. It grants no gold/items and cannot mark any other step complete.
 		return onboarding.AcknowledgeStarterFocus(userId)
+	end
+
+	handlers[RequestIds.RegionDiscoverCurrentZone] = function(userId: number, _payload: any): (any?, string?)
+		-- The client asks "have I just entered somewhere new?"; the server resolves the player's REAL
+		-- position and grants the first-visit reward only if they are genuinely in a new discoverable zone.
+		-- No client-supplied zone id is trusted, so a discovery can never be spoofed.
+		return discovery.DiscoverCurrentZone(userId)
 	end
 
 	handlers[RequestIds.OfflineTrainingSetFocus] = function(userId: number, payload: any): (any?, string?)

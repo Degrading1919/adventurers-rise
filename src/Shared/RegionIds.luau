@@ -18,11 +18,11 @@ local Zone = {
 }
 
 local regionById: { [string]: boolean } = {}
-for _, id in Region do
+for _, id in (Region :: { [string]: string }) do
 	regionById[id] = true
 end
 local zoneById: { [string]: boolean } = {}
-for _, id in Zone do
+for _, id in (Zone :: { [string]: string }) do
 	zoneById[id] = true
 end
 

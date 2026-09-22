@@ -1,15 +1,4 @@
-"""Run World's target-selection and enemy-lifecycle behavior checks.
-
-World is Studio-context: its module body references Roblox instance types (Players, Model, BasePart,
-...), so it is not standalone type-analyzable (same reason it is excluded from the composition
-analyzer set). Its syntax is still covered by the whole-source luau-compile below.
-
-Behaviorally, World.spec exercises the pure, Roblox-free World.SelectAttackTarget directly, and drives
-World.New/Start against a minimal in-spec stub of the Roblox surface the module touches to assert the
-enemy-lifecycle facts (Start's runtime-contract validation, and provocation cleared at an enemy's
-death). A live two-player Studio session still cannot be driven headlessly, so multiplayer targeting
-across real players remains covered by SelectAttackTarget's deterministic checks plus Studio playtest.
-"""
+"""Run the server Discovery definitions and service with fake PlayerData/Economy/zone-resolver boundaries."""
 
 import argparse
 from pathlib import Path
@@ -29,13 +18,10 @@ def main():
     subprocess.run([args.compiler, "--null", *map(str, sources)], check=True, cwd=root)
 
     modules = {
-        "WorldService": root / "src/Server/World/Service.luau",
-        "EnemyAI": root / "src/Server/World/EnemyAI.luau",
-        # World now classifies the player's zone via the shared, Roblox-free RegionDefinitions/RegionIds
-        # (for the Discovery PlayerZoneResolver adapter). They load headlessly, so the behavior harness
-        # provides a minimal fake `game` that resolves ReplicatedStorage.Shared to these module names.
-        "RegionDefinitions": root / "src/Shared/RegionDefinitions.luau",
         "RegionIds": root / "src/Shared/RegionIds.luau",
+        "ProgressionFlagIds": root / "src/Shared/ProgressionFlagIds.luau",
+        "DiscoveryDefinitions": root / "src/Server/Discovery/Definitions.luau",
+        "DiscoveryService": root / "src/Server/Discovery/Service.luau",
     }
     wrappers = ["local loaders = {}"]
     for name, path in modules.items():
@@ -44,12 +30,12 @@ def main():
 local siblings = {}
 for name in loaders do siblings[name] = name end
 local scripts = {
-    RegionDefinitions = { Parent = { RegionIds = "RegionIds" } },
+    DiscoveryService = { Parent = { Definitions = "DiscoveryDefinitions" } },
 }
 local fakeGame = {
     GetService = function(_, name)
         assert(name == "ReplicatedStorage", "Unexpected module service: " .. name)
-        return { Shared = { RegionDefinitions = "RegionDefinitions", RegionIds = "RegionIds" } }
+        return { Shared = { RegionIds = "RegionIds", ProgressionFlagIds = "ProgressionFlagIds" } }
     end,
 }
 local loaded = {}
@@ -62,12 +48,24 @@ local function moduleRequire(name)
 end
 local function runTests(require)
 ''')
-    wrappers.append((root / "tests/World.spec.luau").read_text(encoding="utf-8"))
+    wrappers.append((root / "tests/Discovery.spec.luau").read_text(encoding="utf-8"))
     wrappers.append("end\nrunTests(moduleRequire)\n")
 
-    with tempfile.TemporaryDirectory(prefix=".world-", dir=root / "tests") as directory:
+    with tempfile.TemporaryDirectory(prefix=".discovery-", dir=root / "tests") as directory:
         temporary = Path(directory)
         assert temporary.resolve().is_relative_to(root / "tests")
+        adapted = []
+        for name, path in modules.items():
+            source = path.read_text(encoding="utf-8")
+            source = source.replace('local Shared = game:GetService("ReplicatedStorage").Shared\n', '')
+            source = source.replace('require(Shared.RegionIds)', 'require("./RegionIds")')
+            source = source.replace('require(Shared.ProgressionFlagIds)', 'require("./ProgressionFlagIds")')
+            if name == "DiscoveryService":
+                source = source.replace('require(script.Parent.Definitions)', 'require("./DiscoveryDefinitions")')
+            target = temporary / f"{name}.luau"
+            target.write_text(source, encoding="utf-8")
+            adapted.append(str(target))
+        subprocess.run([args.analyzer, *adapted], check=True, cwd=root)
         bundle = temporary / "behavior.luau"
         bundle.write_text("\n".join(wrappers), encoding="utf-8")
         subprocess.run([args.luau, str(bundle)], check=True, cwd=root)

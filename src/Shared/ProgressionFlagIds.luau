@@ -13,6 +13,13 @@ local ids: { [string]: string } = {
 	GoblinChieftainDefeated = "flag_boss_goblin_chieftain_defeated",
 	BanditWarlordDefeated = "flag_boss_bandit_warlord_defeated",
 	StarterKitGranted = "flag_starter_kit_granted",
+	-- First-visit zone-discovery milestones (one-time, server-set). One per discoverable wilderness
+	-- zone; the town (spawn) is home base, not a discovery. Reused by Discovery rewards + the map.
+	DiscoveredMeadow = "flag_discovered_zone_green_meadows",
+	DiscoveredForest = "flag_discovered_zone_whispering_woods",
+	DiscoveredHills = "flag_discovered_zone_ironrock_hollow",
+	DiscoveredRuins = "flag_discovered_zone_ashen_ruins",
+	DiscoveredWarren = "flag_discovered_zone_goblin_warren",
 	OnboardingStarterFocusAcknowledged = "flag_onboarding_starter_focus_acknowledged",
 	OnboardingTrainingRewardGranted = "flag_onboarding_training_reward_granted",
 	OnboardingFirstGoblinDefeated = "flag_onboarding_first_goblin_defeated",

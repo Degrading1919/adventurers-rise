@@ -13,6 +13,7 @@
 -- health/combat system.
 
 local EnemyAI = require(script.Parent.EnemyAI)
+local RegionDefinitions = require(game:GetService("ReplicatedStorage").Shared.RegionDefinitions)
 
 local ENEMY_SPAWN_TAG = "AR_EnemySpawn"
 -- A territory volume: a tagged BasePart whose position is the population's home/leash anchor and whose
@@ -322,6 +323,21 @@ function Service.New(runtime: Runtime)
 			return nil, "NodeInstanceNotFound"
 		end
 		return { Id = nodeId, Eligible = true, Distance = nearest }, nil
+	end
+
+	-- PlayerZoneResolver: (userId) -> (zoneId, reason). The zone the player physically occupies, derived
+	-- from their authoritative character position via the pure RegionDefinitions classifier, or
+	-- (nil, "NotInAZone") in open wilderness between zones. Discovery uses this as its anti-spoof source.
+	function service.PlayerZoneResolver(userId: number): (string?, string?)
+		local position, reason = characterPosition(userId)
+		if not position then
+			return nil, reason
+		end
+		local zone = RegionDefinitions.ZoneAt(position.X, position.Z)
+		if not zone then
+			return nil, "NotInAZone"
+		end
+		return zone.Id, nil
 	end
 
 	-- Shared nearest-instance scan over a tag, honouring the Workspace-descendant rule. `matches`

@@ -29,6 +29,8 @@ export type Ascension = {
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
 export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
 export type Onboarding = { read GetView: (number) -> (any?, string?) }
+-- The set of zone ids the player has discovered so far, for the map (discovered vs unknown).
+export type Discovery = { read GetDiscovered: (number) -> (any?, string?) }
 -- The effective incoming-damage mitigation EnemyCombat applies (Defense Mastery + equipped armour),
 -- plus the equipped-armour-only portion, as a read-only presentation figure. Cannot fail.
 export type DefenseSummary = (number) -> { Total: number, Armor: number }
@@ -45,6 +47,7 @@ export type Services = {
 	PlayerHealth: PlayerHealth,
 	Onboarding: Onboarding,
 	DefenseSummary: DefenseSummary,
+	Discovery: Discovery,
 }
 
 local SLICE_SKILL_IDS = { SkillIds.Melee, SkillIds.Defense, SkillIds.Mining, SkillIds.Smithing }
@@ -146,6 +149,13 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 		-- equipped-gear-only share. Both are fractions in [0, ceiling]; presentation only.
 		local defense = services.DefenseSummary(userId)
 
+		-- The zones this player has discovered, for the map (discovered vs unknown) and any UI that wants
+		-- to reflect exploration progress. A set { [zoneId] = true }; presentation only.
+		local discovered, discoveredReason = services.Discovery.GetDiscovered(userId)
+		if not discovered then
+			return nil, discoveredReason
+		end
+
 		-- Sanitized onboarding view: the current guided step (title/hint/progress/target) or a completion
 		-- marker. The server derives completion authoritatively; raw progression flags never appear here.
 		local onboarding, onboardingReason = services.Onboarding.GetView(userId)
@@ -227,6 +237,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			},
 			Health = health,
 			Defense = { DamageReduction = defense.Total, ArmorDamageReduction = defense.Armor },
+			Discovery = { DiscoveredZoneIds = discovered },
 			Shop = shop,
 			Recipes = recipes,
 			GatheringNodes = gatheringNodes,

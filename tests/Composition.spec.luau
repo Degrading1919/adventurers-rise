@@ -148,6 +148,8 @@ local function buildStack(options: any?)
 	-- Shop proximity double: default to "at the shop" (distance 0, keyed by catalog/shop id) so existing
 	-- economy tests exercise the normal near case; a test sets a large distance to model shopping remotely.
 	local shopDistances: { [string]: number } = {}
+	-- Which zone each user is standing in, for the Discovery adapter (nil == open wilderness).
+	local playerZones: { [number]: string } = {}
 	local worldAdapters = {
 		CombatDistanceProvider = function(_attackerUserId: number, enemyState: any): (number?, string?)
 			local distance = combatDistances[enemyState.RuntimeId]
@@ -179,6 +181,13 @@ local function buildStack(options: any?)
 				return 0, nil
 			end
 			return distance, nil
+		end,
+		PlayerZoneResolver = function(userId: number): (string?, string?)
+			local zoneId = playerZones[userId]
+			if zoneId == nil then
+				return nil, "NotInAZone"
+			end
+			return zoneId, nil
 		end,
 	}
 
@@ -216,6 +225,7 @@ local function buildStack(options: any?)
 	f.Players = players
 	f.Composition = composition
 	f.CombatDistances = combatDistances
+	f.PlayerZones = playerZones
 	f.GatheringNodes = gatheringNodes
 	f.StationDistances = stationDistances
 	f.ForgeDistance = forgeDistance
@@ -1715,6 +1725,49 @@ test("the read model surfaces the Iron Ore node's sanitized requirements for the
 	equal(iron.OutputItemId, "item_iron_ore")
 	equal(iron.SkillId, SkillIds.Mining)
 	equal(iron.RequiredMiningLevel, 1)
+end)
+
+test("first-visit discovery grants a one-time reward from the player's real position; re-entry, town, and wilderness grant nothing", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+
+	-- Physically in the Green Meadows for the first time -> reward.
+	f.PlayerZones[7] = "zone_green_meadows"
+	local first = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
+	assert(first.Ok, first.Reason)
+	equal(first.Result.NewlyDiscovered, true)
+	equal(first.Result.RewardGold, 30)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 30)
+
+	-- Re-entry is idempotent: no second reward. (Advance past the per-request throttle each time.)
+	f.Advance(1)
+	local second = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
+	assert(second.Ok, second.Reason)
+	equal(second.Result.NewlyDiscovered, false)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 30)
+
+	-- The town is home base, not a discovery.
+	f.Advance(1)
+	f.PlayerZones[7] = "zone_havenbrook"
+	local town = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
+	assert(town.Ok, town.Reason)
+	equal(town.Result.NewlyDiscovered, false)
+
+	-- Open wilderness (and a spoofed payload zone) grants nothing: only the real position counts.
+	f.Advance(1)
+	f.PlayerZones[7] = nil
+	local wild = request(f, 7, RequestIds.RegionDiscoverCurrentZone, { ZoneId = "zone_ashen_ruins" })
+	equal(wild.Ok, false)
+	equal(wild.Reason, "NotInAZone")
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 30)
+
+	-- The read model surfaces discovered zones for the map (discovered vs unknown).
+	f.Advance(1)
+	local state = request(f, 7, RequestIds.StateGet, nil)
+	assert(state.Ok, state.Reason)
+	equal(state.Result.Discovery.DiscoveredZoneIds["zone_green_meadows"], true)
+	equal(state.Result.Discovery.DiscoveredZoneIds["zone_ashen_ruins"], nil)
 end)
 
 print(("%d Composition checks passed"):format(passed))

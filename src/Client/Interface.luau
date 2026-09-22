@@ -1575,6 +1575,18 @@ function Interface.New(player: Player)
 		end)
 	end
 
+	-- First-visit discovery reward feedback (server-authoritative outcome), shown as a toast alongside
+	-- the region-entry banner so exploration feels rewarded.
+	function iface.ShowDiscovery(zoneName: any, rewardGold: any)
+		local name = if type(zoneName) == "string" and zoneName ~= "" then zoneName else "a new area"
+		local gold = if type(rewardGold) == "number" then rewardGold else 0
+		if gold > 0 then
+			showToast(("Discovered %s!\n+%d Gold"):format(name, gold), COLORS.Good)
+		else
+			showToast(("Discovered %s!"):format(name), COLORS.Good)
+		end
+	end
+
 	return iface
 end
 

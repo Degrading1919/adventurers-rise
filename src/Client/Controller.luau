@@ -403,6 +403,14 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			currentZoneId = zid
 			if zone then
 				iface.ShowRegionBanner(zone.DisplayName, zone.Blurb)
+				-- Ask the server whether this entry is a first-time discovery. The server re-validates our
+				-- real position and only grants the one-time reward if we've genuinely arrived somewhere new,
+				-- so this request cannot fabricate a reward. Toast + refresh only on an actual new discovery.
+				local ok, result = net.Request(RequestIds.RegionDiscoverCurrentZone, nil)
+				if ok and type(result) == "table" and result.NewlyDiscovered then
+					iface.ShowDiscovery(zone.DisplayName, result.RewardGold)
+					refresh()
+				end
 			end
 		end
 

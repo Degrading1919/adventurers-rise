@@ -69,6 +69,7 @@ local worldAdapters = {
 	StationDistanceProvider = world.StationDistanceProvider,
 	ForgeDistanceProvider = world.ForgeDistanceProvider,
 	ShopDistanceProvider = world.ShopDistanceProvider,
+	PlayerZoneResolver = world.PlayerZoneResolver,
 }
 
 -- The trusted client/server transport lives in one Remotes folder: a RemoteFunction for client ->
