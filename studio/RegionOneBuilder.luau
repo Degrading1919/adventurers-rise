@@ -151,9 +151,10 @@ do
 	end
 end
 
--- Central keep tower in Havenbrook: the tallest structure and a sightline anchor visible region-wide.
+-- Keep tower on the SW corner of Havenbrook: the tallest structure and a region-wide sightline anchor
+-- (kept clear of the central spawn so a fresh player faces the town, not a wall).
 do
-	local cx, cz = 0, -8
+	local cx, cz = -46, -46
 	part({ Size = Vector3.new(22, 44, 22), Color = Color3.fromRGB(128, 122, 110), Material = M.Brick, CFrame = CFrame.new(cx, 22, cz) })
 	part({ Size = Vector3.new(27, 5, 27), Color = Color3.fromRGB(96, 60, 45), Material = M.Slate, CFrame = CFrame.new(cx, 46, cz) })
 	part({ Size = Vector3.new(6, 16, 6), Color = Color3.fromRGB(150, 60, 45), Material = M.Slate, CFrame = CFrame.new(cx, 55, cz) })

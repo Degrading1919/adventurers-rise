@@ -1464,9 +1464,11 @@ function Interface.New(player: Player)
 	-- distinct places. Presentation only; the Controller drives it from RegionDefinitions.ZoneAt.
 	local TweenService = game:GetService("TweenService")
 	local regionBanner = make("Frame", {
-		Size = UDim2.new(1, -40, 0, 78), Position = UDim2.new(0.5, 0, 0.22, 0), AnchorPoint = Vector2.new(0.5, 0.5),
-		BackgroundTransparency = 1, Visible = false,
+		Size = UDim2.new(1, -40, 0, 82), Position = UDim2.new(0.5, 0, 0.22, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = Color3.fromRGB(12, 14, 20), BackgroundTransparency = 1, Visible = false,
 	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 10) }, regionBanner)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 1.5, Transparency = 1 }, regionBanner)
 	capSize(regionBanner, 560)
 	local regionTitle = make("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1, Font = Enum.Font.GothamBlack, TextSize = 36,
@@ -1484,12 +1486,17 @@ function Interface.New(player: Player)
 		regionTitle.Text = tostring(displayName)
 		regionBlurb.Text = tostring(blurb or "")
 		regionBanner.Visible = true
+		local stroke = regionBanner:FindFirstChildOfClass("UIStroke")
 		local tin = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-		TweenService:Create(regionTitle, tin, { TextTransparency = 0, TextStrokeTransparency = 0.35 }):Play()
-		TweenService:Create(regionBlurb, tin, { TextTransparency = 0.08, TextStrokeTransparency = 0.55 }):Play()
+		TweenService:Create(regionBanner, tin, { BackgroundTransparency = 0.28 }):Play()
+		if stroke then TweenService:Create(stroke, tin, { Transparency = 0.35 }):Play() end
+		TweenService:Create(regionTitle, tin, { TextTransparency = 0, TextStrokeTransparency = 0.2 }):Play()
+		TweenService:Create(regionBlurb, tin, { TextTransparency = 0.05, TextStrokeTransparency = 0.4 }):Play()
 		task.delay(2.8, function()
 			if myToken ~= bannerToken then return end
 			local tout = TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			TweenService:Create(regionBanner, tout, { BackgroundTransparency = 1 }):Play()
+			if stroke then TweenService:Create(stroke, tout, { Transparency = 1 }):Play() end
 			TweenService:Create(regionTitle, tout, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
 			TweenService:Create(regionBlurb, tout, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
 			task.delay(0.75, function()
