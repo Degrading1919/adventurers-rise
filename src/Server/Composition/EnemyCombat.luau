@@ -264,4 +264,9 @@ function Service.New(playerHealth: PlayerHealth, skills: Skills, configuration: 
 	return table.freeze(service)
 end
 
+-- The single source of truth for the incoming-damage-reduction ceiling. Exposed so presentation code
+-- (e.g. the read model's Defense summary) clamps to the EXACT value combat applies, with no duplicated
+-- literal to drift out of sync.
+Service.MaxIncomingDamageReduction = MAX_INCOMING_DAMAGE_REDUCTION
+
 return table.freeze(Service)

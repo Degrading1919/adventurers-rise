@@ -245,10 +245,11 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- equipped armour), so the client can show the player how much damage their Defense/gear actually
 	-- reduces. Total is clamped to the exact ceiling EnemyCombat uses; Armor is the equipped-gear-only
 	-- portion so the Gear panel can attribute the reward to the armour they crafted. Derived server-side.
-	local READMODEL_MAX_INCOMING_DAMAGE_REDUCTION = 0.9 -- MUST match EnemyCombat.MAX_INCOMING_DAMAGE_REDUCTION
 	local function defenseSummary(userId: number): { Total: number, Armor: number }
 		local raw = defenseModifiers(userId).IncomingDamageReduction
-		local total = math.clamp(if type(raw) == "number" then math.max(0, raw) else 0, 0, READMODEL_MAX_INCOMING_DAMAGE_REDUCTION)
+		-- Clamp to EnemyCombat's own exported ceiling, so this display value is the SAME bound combat
+		-- applies with no duplicated literal to drift out of sync.
+		local total = math.clamp(if type(raw) == "number" then math.max(0, raw) else 0, 0, EnemyCombat.MaxIncomingDamageReduction)
 		return { Total = total, Armor = equippedArmorReduction(userId) }
 	end
 	local function miningModifiers(userId: number): { [string]: number }
