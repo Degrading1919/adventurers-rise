@@ -1524,7 +1524,7 @@ function Interface.New(player: Player)
 			end
 		end
 		local discovered = (lastState and lastState.Discovery and lastState.Discovery.DiscoveredZoneIds) or {}
-		for _, zone in RegionDefinitions.Zones do
+		for i, zone in RegionDefinitions.Zones do
 			local u, v = worldToMapScale(zone.CenterX, zone.CenterZ)
 			local known = zone.Safe == true or discovered[zone.Id] == true
 			local dot = make("Frame", {
@@ -1533,12 +1533,15 @@ function Interface.New(player: Player)
 				BorderSizePixel = 0, ZIndex = 3,
 			}, mapArea)
 			make("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+			-- Stagger labels vertically by index so neighbouring zones (e.g. the eastern Meadow + Warren,
+			-- which sit close together) don't overprint each other.
+			local labelYOffset = 10 + (i % 2) * 16
 			make("TextLabel", {
-				Size = UDim2.new(0, 130, 0, 14), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(u, 0, v, 9),
+				Size = UDim2.new(0, 118, 0, 14), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(u, 0, v, labelYOffset),
 				BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
 				TextColor3 = if known then COLORS.Text else COLORS.Dim,
 				Text = if known then zone.DisplayName else "???",
-				ZIndex = 3,
+				ZIndex = 4,
 			}, mapArea)
 		end
 	end
