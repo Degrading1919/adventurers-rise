@@ -67,6 +67,13 @@ local definitions: { [string]: Definition } = {
 	[RecipeIds.IronHelm] = definition(RecipeIds.IronHelm, "Iron Helm", 4, { input("item_iron_bar", 2) }, "armor_iron_helm", 1, 16, 4),
 	[RecipeIds.IronBody] = definition(RecipeIds.IronBody, "Iron Chestplate", 7, { input("item_iron_bar", 4) }, "armor_iron_body", 1, 30, 5),
 	[RecipeIds.IronLegs] = definition(RecipeIds.IronLegs, "Iron Greaves", 6, { input("item_iron_bar", 3) }, "armor_iron_legs", 1, 24, 5),
+	-- Tier-2 steel chain: smelt Steel Bars from an Iron Bar + Coal (the second resource), then forge the
+	-- steel weapon and armour set. Smithing-gated above the iron tier so steel is a genuine second rung.
+	[RecipeIds.SteelBar] = definition(RecipeIds.SteelBar, "Steel Bar", 8, { input("item_iron_bar", 1), input("item_coal", 1) }, "item_steel_bar", 1, 24, 3),
+	[RecipeIds.SwordSteel] = definition(RecipeIds.SwordSteel, "Steel Sword", 10, { input("item_steel_bar", 3) }, "weapon_sword_steel", 1, 40, 5),
+	[RecipeIds.SteelHelm] = definition(RecipeIds.SteelHelm, "Steel Helm", 9, { input("item_steel_bar", 2) }, "armor_steel_helm", 1, 34, 5),
+	[RecipeIds.SteelLegs] = definition(RecipeIds.SteelLegs, "Steel Greaves", 11, { input("item_steel_bar", 3) }, "armor_steel_legs", 1, 46, 6),
+	[RecipeIds.SteelBody] = definition(RecipeIds.SteelBody, "Steel Chestplate", 12, { input("item_steel_bar", 4) }, "armor_steel_body", 1, 58, 6),
 }
 
 function CraftingDefinitions.Validate(candidateDefinitions: any): (boolean, string?)

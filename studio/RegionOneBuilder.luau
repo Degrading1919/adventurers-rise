@@ -231,6 +231,30 @@ if iron then
 	end
 end
 
+-- ---------- 4b) Coal seam -> DEEP Ironrock Hollow (past the mine, by the hobgoblins) ----------
+-- Second resource, behind the steel tier. Sited deep in the hollow near hobgoblin_hollow so gathering
+-- it is a step up in danger from the safe starter iron vein — a real difficulty gradient for resources.
+-- Created-or-updated by the builder; each rock is tagged AR_GatheringNode with the stable node id, so
+-- World.GatheringNodeResolver and the client discover them generically (same seam as Iron Ore).
+local coalFolder = AR:FindFirstChild("Coal")
+if not coalFolder then coalFolder = Instance.new("Folder"); coalFolder.Name = "Coal"; coalFolder.Parent = AR end
+coalFolder:ClearAllChildren()
+local COAL_SPOTS = {
+	Vector3.new(-12, 0, -318), Vector3.new(2, 0, -330), Vector3.new(14, 0, -320), Vector3.new(-2, 0, -342),
+}
+for i, spot in ipairs(COAL_SPOTS) do
+	local n = Instance.new("Part")
+	n.Name = "CoalNode_" .. i
+	n.Anchored = true; n.CanCollide = true; n.CanQuery = true; n.CanTouch = false
+	n.Material = M.Slate; n.Color = Color3.fromRGB(28, 28, 34)
+	n.Size = Vector3.new(4.5, 3, 4.5)
+	n.Position = Vector3.new(spot.X, SURFACE + 1.5, spot.Z)
+	n.TopSurface = Enum.SurfaceType.Smooth; n.BottomSurface = Enum.SurfaceType.Smooth
+	n:SetAttribute("GatheringNodeId", "node_coal")
+	CollectionService:AddTag(n, "AR_GatheringNode")
+	n.Parent = coalFolder
+end
+
 -- ---------- 5) lighting mood: bright, clear grounded-medieval afternoon ----------
 Lighting.ClockTime = 14
 Lighting.Brightness = 3
@@ -239,4 +263,4 @@ Lighting.Ambient = Color3.fromRGB(90, 90, 95)
 local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
 if atmos then atmos.Density = 0.08; atmos.Haze = 0.4; atmos.Glare = 0; atmos.Color = Color3.fromRGB(220, 224, 230); atmos.Decay = Color3.fromRGB(150, 160, 175) end
 
-return ("Region I 'The Marchlands' built: terrain biomes + %d scenery parts; town, mine, ruins, warren landmarks; territories & ore relocated to zones. SAVE THE PLACE to persist."):format(#scenery:GetChildren())
+return ("Region I 'The Marchlands' built: terrain biomes + %d scenery parts; town, mine, ruins, warren landmarks; territories & iron relocated to zones; %d coal nodes seeded deep in Ironrock Hollow. SAVE THE PLACE to persist."):format(#scenery:GetChildren(), #coalFolder:GetChildren())

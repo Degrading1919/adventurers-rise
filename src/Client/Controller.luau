@@ -24,6 +24,11 @@ local PROXIMITY_INTERVAL = 0.2
 
 local ENEMY_TAG = "AR_Enemy"
 local NODE_TAG = "AR_GatheringNode"
+-- Friendly names for the mining status line, keyed by stable GatheringNodeId (presentation only).
+local NODE_LABELS: { [string]: string } = {
+	[GatheringNodeIds.IronOre] = "Iron Ore",
+	[GatheringNodeIds.Coal] = "Coal",
+}
 local STATION_TAG = "AR_TrainingStation"
 local FORGE_TAG = "AR_Forge"
 local SHOP_TAG = "AR_Shop"
@@ -42,6 +47,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	local trainingStationId: string? = nil
 	local attackActive = false
 	local currentStationId: string? = nil
+	-- The stable GatheringNodeId of the resource node the player is currently standing at (iron, coal,
+	-- ...), so Mine gathers whatever is here rather than a single hardcoded resource.
+	local currentNodeId: string? = nil
 	local currentTarget: string? = nil
 	local currentTargetLabel: string? = nil
 	-- The model of the current combat target, so the objective highlight and combat-target indicator
@@ -363,6 +371,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		local forge = nearestTagged(FORGE_TAG, position, INTERACT_RADIUS)
 		local shop = nearestTagged(SHOP_TAG, position, INTERACT_RADIUS)
 		currentStationId = if station then station:GetAttribute("StationId") else nil
+		currentNodeId = if node then node:GetAttribute("GatheringNodeId") else nil
 
 		-- Soft-target + boss scan, and the authoritative-health readouts + combat-target indicator.
 		local target, boss = scanCombat(position)
@@ -456,10 +465,13 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			iface.SetStatus("Mining stopped.")
 			refresh()
 		else
-			local ok, _, reason = net.Request(RequestIds.GatheringBegin, { NodeId = GatheringNodeIds.IronOre })
+			-- Mine whatever node the player is standing at (iron, coal, ...); fall back to iron only if the
+			-- proximity scan hasn't resolved a node id yet, matching the pre-multi-resource behaviour.
+			local nodeId = currentNodeId or GatheringNodeIds.IronOre
+			local ok, _, reason = net.Request(RequestIds.GatheringBegin, { NodeId = nodeId })
 			if ok then
 				miningActive = true
-				iface.SetStatus("Mining Iron Ore...")
+				iface.SetStatus(("Mining %s..."):format(NODE_LABELS[nodeId] or "resource"))
 			else
 				iface.SetStatus("Mine: " .. reasonText(reason))
 			end

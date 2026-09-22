@@ -32,6 +32,12 @@ local ITEM_LABELS: { [string]: string } = {
 	armor_iron_helm = "Iron Helm",
 	armor_iron_body = "Iron Chestplate",
 	armor_iron_legs = "Iron Greaves",
+	item_coal = "Coal",
+	item_steel_bar = "Steel Bar",
+	weapon_sword_steel = "Steel Sword",
+	armor_steel_helm = "Steel Helm",
+	armor_steel_body = "Steel Chestplate",
+	armor_steel_legs = "Steel Greaves",
 }
 local function itemLabel(id: string): string
 	return ITEM_LABELS[id] or id

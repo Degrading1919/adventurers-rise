@@ -44,6 +44,9 @@ end
 -- These requirements, range, yields, and XP rates are provisional and replaceable data.
 local definitions: { [string]: Definition } = {
 	[GatheringNodeIds.IronOre] = definition(GatheringNodeIds.IronOre, "Iron Ore", "item_iron_ore", 1, 12, 1, 2),
+	-- Second resource: a Coal seam gated a little higher than iron (Mining Lv3) and sited deeper on the
+	-- difficulty gradient, so the steel tier requires a short progression beyond the starting iron loop.
+	[GatheringNodeIds.Coal] = definition(GatheringNodeIds.Coal, "Coal", "item_coal", 3, 12, 1, 3),
 }
 
 function GatheringDefinitions.Validate(candidateDefinitions: any): (boolean, string?)

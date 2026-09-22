@@ -141,6 +141,33 @@ test("Smithing recipes are stable, data-driven, and canonical Ore -> Bar -> Swor
 	end
 end)
 
+test("the steel tier chains a two-input Steel Bar (Iron Bar + Coal) into steel gear", function()
+	-- Steel Bar: the only recipe with two distinct stackable inputs -> a stackable metal.
+	local steelBar = CraftingDefinitions.ById[RecipeIds.SteelBar]
+	equal(steelBar.OutputItemId, "item_steel_bar")
+	equal(ItemDefinitions.ById.item_steel_bar.Kind, "Stackable")
+	equal(#steelBar.Inputs, 2)
+	local inputIds = { [steelBar.Inputs[1].ItemDefinitionId] = true, [steelBar.Inputs[2].ItemDefinitionId] = true }
+	assert(inputIds[IronBar] and inputIds["item_coal"], "Steel Bar must be smelted from an Iron Bar and Coal")
+
+	-- Steel sword sits above the iron sword on the weapon ladder.
+	local steelSword = CraftingDefinitions.ById[RecipeIds.SwordSteel]
+	equal(steelSword.OutputItemId, "weapon_sword_steel")
+	assert(steelSword.RequiredSmithingLevel > CraftingDefinitions.ById[SwordRecipe].RequiredSmithingLevel, "steel sword gated above iron sword")
+	assert(ItemDefinitions.ById.weapon_sword_steel.Melee.Damage > ItemDefinitions.ById[UpgradedSword].Melee.Damage, "steel sword hits harder")
+
+	-- Steel armour set: Steel Bars -> Discrete armour, each piece beats its iron counterpart.
+	for _, recipeId in { RecipeIds.SteelHelm, RecipeIds.SteelBody, RecipeIds.SteelLegs } do
+		equal(RecipeIds.ById[recipeId], true)
+		local recipe = CraftingDefinitions.ById[recipeId]
+		equal(recipe.Inputs[1].ItemDefinitionId, "item_steel_bar")
+		local output = ItemDefinitions.ById[recipe.OutputItemId]
+		equal(output.Kind, "Discrete")
+		equal(recipe.OutputAmount, 1)
+		assert(output.Armor ~= nil and output.Armor.DamageReduction > 0, "steel armour must carry a DamageReduction")
+	end
+end)
+
 test("crafting Iron Ore into Iron Bar consumes inputs, adds output, and awards Smithing XP", function()
 	local f = fixture()
 	local recipe = CraftingDefinitions.ById[IronBarRecipe]

@@ -125,6 +125,16 @@ test("Iron Ore uses a stable nondepleting gathering definition", function()
 	equal(node.IsDepleting, false)
 end)
 
+test("Coal is a second stable gathering node, gated above iron and yielding its own resource", function()
+	equal(GatheringNodeIds.ById[GatheringNodeIds.Coal], true)
+	local coal = GatheringDefinitions.ById[GatheringNodeIds.Coal]
+	equal(coal.Id, GatheringNodeIds.Coal)
+	equal(coal.OutputItemId, "item_coal")
+	equal(coal.SkillId, SkillIds.Mining)
+	equal(coal.IsDepleting, false)
+	assert(coal.RequiredMiningLevel > 1, "coal should be gated above the starting iron node")
+end)
+
 test("basic and upgraded pickaxes use centralized mining effectiveness", function()
 	local basic = assert(ItemDefinitions.ById["tool_pickaxe_basic"].Mining)
 	local upgraded = assert(ItemDefinitions.ById["tool_pickaxe_upgraded"].Mining)
