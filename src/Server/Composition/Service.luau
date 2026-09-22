@@ -31,6 +31,7 @@ local PlayerEvents = require(script.Parent.PlayerEvents)
 local ReadModel = require(script.Parent.ReadModel)
 local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
 local EventIds = require(game:GetService("ReplicatedStorage").Shared.EventIds)
+local ItemDefinitions = require(game:GetService("ReplicatedStorage").Shared.ItemDefinitions)
 
 export type PlayerData = {
 	read GetSnapshot: (number) -> any?,
@@ -209,8 +210,36 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local function meleeModifiers(userId: number): { [string]: number }
 		return modifiersForSkill(userId, SkillIds.Melee)
 	end
+	-- Sum the incoming-damage mitigation of this player's currently-equipped armour pieces (Head/Body/
+	-- Legs). Read from the same authoritative equipment snapshot the equip flow writes; unknown or
+	-- non-armour items contribute nothing. This is server-derived, never client-supplied.
+	local function equippedArmorReduction(userId: number): number
+		local snapshot = equipment.GetSnapshot(userId)
+		if type(snapshot) ~= "table" then
+			return 0
+		end
+		local total = 0
+		for _, equippedItem in snapshot do
+			local itemDefinition = ItemDefinitions.ById[equippedItem.DefinitionId]
+			if itemDefinition and itemDefinition.Armor then
+				total += itemDefinition.Armor.DamageReduction
+			end
+		end
+		return total
+	end
+	-- Defense Mastery totals PLUS equipped-armour mitigation, composed into the single
+	-- IncomingDamageReduction channel EnemyCombat already reads and clamps. Folding armour here (rather
+	-- than in EnemyCombat) keeps EnemyCombat/PlayerHealth unchanged: armour is just more of the same
+	-- reduction the Defense tree already contributes. A cloned table is returned so we never mutate
+	-- Mastery's cached totals; MaxHealthBonus (read by PlayerHealth) is passed through untouched.
 	local function defenseModifiers(userId: number): { [string]: number }
-		return modifiersForSkill(userId, SkillIds.Defense)
+		local totals = table.clone(modifiersForSkill(userId, SkillIds.Defense))
+		local armorReduction = equippedArmorReduction(userId)
+		if armorReduction ~= 0 then
+			local existing = totals.IncomingDamageReduction
+			totals.IncomingDamageReduction = (if type(existing) == "number" then existing else 0) + armorReduction
+		end
+		return totals
 	end
 	local function miningModifiers(userId: number): { [string]: number }
 		return modifiersForSkill(userId, SkillIds.Mining)

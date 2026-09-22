@@ -15,12 +15,18 @@ export type Melee = {
 export type Mining = {
 	read GatheringRateMultiplier: number,
 }
+export type Armor = {
+	-- Fraction of incoming damage this piece mitigates (0..1). Pieces stack additively; the
+	-- server clamps the equipped total inside the existing IncomingDamageReduction ceiling.
+	read DamageReduction: number,
+}
 export type Definition = {
 	read Id: string,
 	read Kind: Kind,
 	read Equipment: Equipment?,
 	read Melee: Melee?,
 	read Mining: Mining?,
+	read Armor: Armor?,
 }
 
 local function equipment(slotId: string, effectivenessTier: number): Equipment
@@ -39,8 +45,26 @@ local function mining(gatheringRateMultiplier: number): Mining
 	return table.freeze({ GatheringRateMultiplier = gatheringRateMultiplier })
 end
 
-local function definition(id: string, kind: Kind, equipmentData: Equipment?, meleeData: Melee?, miningData: Mining?): Definition
-	return table.freeze({ Id = id, Kind = kind, Equipment = equipmentData, Melee = meleeData, Mining = miningData })
+local function armor(damageReduction: number): Armor
+	return table.freeze({ DamageReduction = damageReduction })
+end
+
+local function definition(
+	id: string,
+	kind: Kind,
+	equipmentData: Equipment?,
+	meleeData: Melee?,
+	miningData: Mining?,
+	armorData: Armor?
+): Definition
+	return table.freeze({
+		Id = id,
+		Kind = kind,
+		Equipment = equipmentData,
+		Melee = meleeData,
+		Mining = miningData,
+		Armor = armorData,
+	})
 end
 
 -- Persist these IDs. Tiers, melee, and mining values are provisional centralized balance data.
@@ -51,6 +75,12 @@ local definitions: { [string]: Definition } = {
 	weapon_sword_upgraded = definition("weapon_sword_upgraded", "Discrete", equipment(EquipmentSlots.Weapon, 2), melee(15, 0.8, 9)),
 	tool_pickaxe_basic = definition("tool_pickaxe_basic", "Discrete", equipment(EquipmentSlots.Tool, 1), nil, mining(1)),
 	tool_pickaxe_upgraded = definition("tool_pickaxe_upgraded", "Discrete", equipment(EquipmentSlots.Tool, 2), nil, mining(2)),
+	-- Iron armour set (first armour tier). Head/Body/Legs each mitigate a slice of incoming damage;
+	-- the full set totals 0.16 (well under the server's IncomingDamageReduction ceiling), so armour
+	-- meaningfully eases harder zones without trivialising combat. Craftable from Iron Bars (Smithing).
+	armor_iron_helm = definition("armor_iron_helm", "Discrete", equipment(EquipmentSlots.Head, 1), nil, nil, armor(0.04)),
+	armor_iron_body = definition("armor_iron_body", "Discrete", equipment(EquipmentSlots.Body, 1), nil, nil, armor(0.07)),
+	armor_iron_legs = definition("armor_iron_legs", "Discrete", equipment(EquipmentSlots.Legs, 1), nil, nil, armor(0.05)),
 	-- Rare Goblin Chieftain boss material; the minimum new item ID needed to demonstrate rare boss loot.
 	item_chieftain_fang = definition("item_chieftain_fang", "Stackable"),
 	-- Rare Bandit Warlord boss material (the ruined-tower captain's seal); the minimum new item ID for

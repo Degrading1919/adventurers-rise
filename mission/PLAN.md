@@ -12,13 +12,13 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phase 1 DONE (evaluator fix cycle applied). Starting Phase 2.
+## CURRENT PHASE: Phase 1 & 2 DONE. Phase 3 armor slice CODE-COMPLETE (22 suites green), pending Studio playtest.
+Phase 3 approach (DONE for iron tier): Head/Body/Legs slots + an armor damage-reduction stat folded into the EXISTING EnemyCombat `IncomingDamageReduction` slot via the Composition defense-modifier provider (so EnemyCombat itself is unchanged — least-regression). Iron set (helm 0.04 / body 0.07 / legs 0.05 = 0.16) craftable from Iron Bars via Smithing (helm Lv4 / legs Lv6 / body Lv7). Gear panel + Forge are data-driven so armor appears/equips automatically (added ITEM_LABELS + SLOT_LABELS). EquipmentVisuals iterates only Weapon/Tool → armor has no character visual yet (clean seam). New Composition test proves 16% reduction through the real pipeline.
 
-## NEXT ACTION — Phase 2: enemy ecology + combat feel
-1. **New archetypes (data):** add Bandit (Ashen Ruins) + Hobgoblin (Ironrock Hollow) to `Enemies/Definitions` + `Shared/EnemyIds` (higher bands than goblins); placeholder box/mesh silhouettes; client display names. Add their territories via the builder (with LevelMin/Max) so the two currently-combat-empty tier-3 zones become real threats. Test.
-2. **2nd boss:** Bandit Warlord on the reusable boss framework (Bosses/Definitions), sited in the Ashen Ruins ruined tower; participation/personal-reward like the Chieftain. Test.
-3. **Loot tables:** a pure, tested loot-roll module + per-archetype tables (enemies drop region materials/gold, bosses drop better); wire into the combat/reward path (server-authoritative). Test.
-4. **Combat feel:** hit flash + hit SFX + attack swing + enemy death fx (client presentation on authoritative hits).
-Each item: implement → Studio-integrate → playtest → fix. Full independent evaluator at Phase-2 end (re-grades world + ecology vs the rubric, incl. whether criterion 2 needs the deferred terrain-elevation pass).
+## NEXT ACTION — Phase 3 continued
+1. **Studio-integrate + playtest the iron armor loop** (sync branch code into the place; craft helm/body/legs at the Forge, equip in Gear, verify reduced enemy damage in Play; regression pass of the existing loop). Update PROGRESS with the result. **SAVE THE PLACE.**
+2. **2nd resource + tier:** add a second gatherable resource (2nd ore or wood) with a gathering node + geography, then a Steel (or copper→iron→steel) weapon+armor tier so gear is a real ladder, not a single step. Data-driven via Gathering/Crafting Definitions + Ids. Test + playtest.
+3. **Shop integration:** optionally sell/buy armor via Economy/ShopCatalog so gear is obtainable by gold too.
+4. Independent evaluator at Phase-3 end: re-grade criterion 5 (weapons AND armor tiers that visibly ease/gate) + 8 (gather→produce chains). Consider surfacing an armor/defense readout in the read model so the benefit is legible (Phase 5 polish candidate).
 
 Remember: **SAVE THE PLACE** (Studio-owned world not in Git). Fresh-context bootstrap in MISSION.md.

@@ -76,6 +76,9 @@ test("definitions contain only the required classified slice items", function()
 		tool_pickaxe_upgraded = "Discrete",
 		item_chieftain_fang = "Stackable",
 		item_warlord_seal = "Stackable",
+		armor_iron_helm = "Discrete",
+		armor_iron_body = "Discrete",
+		armor_iron_legs = "Discrete",
 	}
 	local count = 0
 	for id, definition in ItemDefinitions.ById do
@@ -83,9 +86,13 @@ test("definitions contain only the required classified slice items", function()
 		equal(definition.Kind, expected[id])
 		count += 1
 	end
-	equal(count, 8)
+	equal(count, 11)
 	equal(ItemDefinitions.ById[StarterSword].Equipment.SlotId, EquipmentSlots.Weapon)
 	equal(ItemDefinitions.ById[BasicPickaxe].Equipment.SlotId, EquipmentSlots.Tool)
+	equal(ItemDefinitions.ById.armor_iron_helm.Equipment.SlotId, EquipmentSlots.Head)
+	equal(ItemDefinitions.ById.armor_iron_body.Equipment.SlotId, EquipmentSlots.Body)
+	equal(ItemDefinitions.ById.armor_iron_legs.Equipment.SlotId, EquipmentSlots.Legs)
+	equal(ItemDefinitions.ById.armor_iron_body.Armor.DamageReduction, 0.07)
 end)
 
 test("trusted stack mutations preserve unrelated PlayerData state", function()

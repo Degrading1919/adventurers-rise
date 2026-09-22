@@ -2,6 +2,7 @@
 
 local SkillIds = require("SkillIds")
 local EquipmentSlots = require("EquipmentSlots")
+local ItemDefinitions = require("ItemDefinitions")
 local EnemyIds = require("EnemyIds")
 local GatheringNodeIds = require("GatheringNodeIds")
 local AscensionIds = require("AscensionIds")
@@ -579,6 +580,32 @@ test("selecting a Defense Fortitude node raises the composed player's maximum he
 	local after = request(f, 7, RequestIds.StateGet, nil)
 	assert(after.Ok, after.Reason)
 	equal(after.Result.Health.MaxHealth, 102) -- floor(100 * 1.02 + 0.5)
+end)
+
+test("equipped iron armour reduces incoming enemy damage through the composed defense pipeline", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	-- Provocation guarantees engagement regardless of relative levels, isolating the damage-reduction math.
+	assert(f.Composition.Services.EnemyCombat.RecordProvocation(enemy.RuntimeId, 7))
+
+	-- Baseline: no armour, no Defense Mastery -> the enemy's full authoritative damage lands.
+	local before = assert(f.Composition.Services.EnemyCombat.ResolveAttack(7, enemy))
+	local baselineDamage = before.Damage
+	assert(baselineDamage > 0, "expected the unarmoured hit to apply positive damage")
+
+	-- Equip the full iron set (Head/Body/Legs), each slot resolved from its own definition.
+	for _, itemId in { "armor_iron_helm", "armor_iron_body", "armor_iron_legs" } do
+		local piece = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, itemId))
+		local slotId = ItemDefinitions.ById[itemId].Equipment.SlotId
+		assert(f.Composition.Services.Equipment.Equip(7, slotId, piece.InstanceId))
+	end
+
+	-- Same enemy, same provocation: only armour changed. Set total reduction = 0.04 + 0.07 + 0.05 = 0.16.
+	local after = assert(f.Composition.Services.EnemyCombat.ResolveAttack(7, enemy))
+	assert(after.Damage < baselineDamage, "armour must reduce incoming damage")
+	local expected = baselineDamage * (1 - 0.16)
+	assert(math.abs(after.Damage - expected) < 1e-6, "expected " .. tostring(expected) .. " got " .. tostring(after.Damage))
 end)
 
 test("a normal Goblin's death pays its authoritative Gold exactly once", function()

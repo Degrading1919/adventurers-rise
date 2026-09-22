@@ -62,6 +62,11 @@ end
 local definitions: { [string]: Definition } = {
 	[RecipeIds.IronBar] = definition(RecipeIds.IronBar, "Iron Bar", 1, { input("item_iron_ore", 2) }, "item_iron_bar", 1, 6, 2),
 	[RecipeIds.SwordUpgraded] = definition(RecipeIds.SwordUpgraded, "Upgraded Iron Sword", 5, { input("item_iron_bar", 3) }, "weapon_sword_upgraded", 1, 20, 4),
+	-- Iron armour set — the first Defense-gear production chain. Smithing-gated above the sword so armour
+	-- is a mid-game investment; bar costs scale with the piece's protection (legs/body cost more than helm).
+	[RecipeIds.IronHelm] = definition(RecipeIds.IronHelm, "Iron Helm", 4, { input("item_iron_bar", 2) }, "armor_iron_helm", 1, 16, 4),
+	[RecipeIds.IronBody] = definition(RecipeIds.IronBody, "Iron Chestplate", 7, { input("item_iron_bar", 4) }, "armor_iron_body", 1, 30, 5),
+	[RecipeIds.IronLegs] = definition(RecipeIds.IronLegs, "Iron Greaves", 6, { input("item_iron_bar", 3) }, "armor_iron_legs", 1, 24, 5),
 }
 
 function CraftingDefinitions.Validate(candidateDefinitions: any): (boolean, string?)

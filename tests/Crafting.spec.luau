@@ -126,6 +126,19 @@ test("Smithing recipes are stable, data-driven, and canonical Ore -> Bar -> Swor
 	equal(swordRecipe.OutputItemId, UpgradedSword)
 	equal(ItemDefinitions.ById[swordRecipe.OutputItemId].Kind, "Discrete")
 	equal(swordRecipe.OutputAmount, 1)
+
+	-- Iron armour set: Bars -> Discrete armour, Smithing-gated, one instance per craft.
+	for _, recipeId in { RecipeIds.IronHelm, RecipeIds.IronBody, RecipeIds.IronLegs } do
+		equal(RecipeIds.ById[recipeId], true)
+		local recipe = CraftingDefinitions.ById[recipeId]
+		equal(recipe.Id, recipeId)
+		equal(recipe.SkillId, SkillIds.Smithing)
+		equal(recipe.Inputs[1].ItemDefinitionId, IronBar)
+		local output = ItemDefinitions.ById[recipe.OutputItemId]
+		equal(output.Kind, "Discrete")
+		equal(recipe.OutputAmount, 1)
+		assert(output.Armor ~= nil and output.Armor.DamageReduction > 0, "armour recipe output must carry a DamageReduction")
+	end
 end)
 
 test("crafting Iron Ore into Iron Bar consumes inputs, adds output, and awards Smithing XP", function()

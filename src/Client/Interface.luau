@@ -29,6 +29,9 @@ local ITEM_LABELS: { [string]: string } = {
 	weapon_sword_upgraded = "Upgraded Sword",
 	tool_pickaxe_basic = "Basic Pickaxe",
 	tool_pickaxe_upgraded = "Upgraded Pickaxe",
+	armor_iron_helm = "Iron Helm",
+	armor_iron_body = "Iron Chestplate",
+	armor_iron_legs = "Iron Greaves",
 }
 local function itemLabel(id: string): string
 	return ITEM_LABELS[id] or id
@@ -489,7 +492,13 @@ function Interface.New(player: Player)
 	}, gearContent)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, gearList)
 
-	local SLOT_LABELS: { [string]: string } = { [EquipmentSlots.Weapon] = "Weapon", [EquipmentSlots.Tool] = "Tool" }
+	local SLOT_LABELS: { [string]: string } = {
+		[EquipmentSlots.Weapon] = "Weapon",
+		[EquipmentSlots.Tool] = "Tool",
+		[EquipmentSlots.Head] = "Head",
+		[EquipmentSlots.Body] = "Body",
+		[EquipmentSlots.Legs] = "Legs",
+	}
 	local function gearHeader(text: string, order2: number)
 		make("TextLabel", {
 			Size = UDim2.new(1, -6, 0, 18), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
