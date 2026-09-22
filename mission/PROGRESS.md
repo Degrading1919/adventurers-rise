@@ -24,5 +24,9 @@
 - `Workspace.AR_World.Territories` holds 4 `AR_EnemyTerritory` markers (living-world enemies). Old `AR_EnemySpawn` markers removed. Git-owned script Sources were synced into the place at the living-world commit.
 - **The place is currently synced to `feature/living-world-enemies` code.** Re-sync to `feature/open-world-rpg` when world changes land (fetch raw from the branch, set script.Source; HttpEnabled on).
 
+## BLOCKER (active)
+- **The Studio place is CLOSED** ("Place is not open" from the MCP; both Studio instances report null names). Studio-side world building (terrain/scene) and playtesting are impossible until the owner **reopens the Adventurer's Rise place in Roblox Studio** (with the Studio-MCP plugin connected). Repo prep continues meanwhile; Studio integration + playtest resume the instant the place is back.
+
 ## Checkpoint log
-- **[Phase 0]** Mission control system created (`mission/` artifacts + DoD rubric). Branch `feature/open-world-rpg` cut off `feature/living-world-enemies`. Baseline: 21 suites green. NEXT: begin Phase 1 world build.
+- **[Phase 0]** Mission control system created (`mission/` artifacts + DoD rubric). Branch `feature/open-world-rpg` cut off `feature/living-world-enemies`. Baseline: 21 suites green.
+- **[Phase 1 — repo prep, Studio blocked]** Added `Shared/RegionIds` + `Shared/RegionDefinitions` (Region I "The Marchlands" + 6 zones: Havenbrook town, Green Meadows, Whispering Woods, Ironrock Hollow, Ashen Ruins, Goblin Warren) with a pure `ZoneAt(x,z)` classifier + `RegionDefinitions.spec` (6 checks). **22 suites green.** Authored `studio/RegionOneBuilder.luau` — the reproducible Region I world generator (terrain biomes, edge hills/river, biome props, town/mine/ruins/warren landmarks, relocates hub + territory markers + ore to zones, lighting mood) — RUN-READY to paste into the Studio MCP `execute_luau` (Edit mode) when the place reopens. **NEXT:** run the builder in Studio, then wire client region-banner + ambient audio (reads RegionDefinitions.ZoneAt), sync branch code into the place, playtest, independent critic.

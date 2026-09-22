@@ -12,7 +12,13 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phase 0 → starting Phase 1
+## CURRENT PHASE: Phase 1 (The World) — repo prep done; Studio integration BLOCKED (place closed)
 
-## NEXT ACTION
-Commit the mission/ control artifacts. Then begin **Phase 1**: (a) research Roblox terrain/biome/zone/audio specifics via a subagent; (b) design the Region I map (hub + biome sub-areas + POIs on a ~1000–1500 stud plan) and write it into DECISIONS; (c) build a reproducible edit-time **scene-builder** (repo script run via the MCP) that sculpts terrain biomes, relocates hub content, and places tagged `AR_EnemyTerritory` + resource markers on a difficulty gradient; (d) add zone detection + region banner + ambient audio; (e) playtest + independent critic + fix.
+## NEXT ACTION (when the Studio place is reopened)
+1. Reconnect the Studio MCP (place id 136843447225408); run `studio/RegionOneBuilder.luau` via `execute_luau` (Edit mode) to build Region I "The Marchlands". Screenshot; tune terrain/props/positions live.
+2. Sync branch `feature/open-world-rpg` code into the place (raw-fetch script Sources; add new `Shared/RegionIds` + `Shared/RegionDefinitions` ModuleScripts under ReplicatedStorage.Shared).
+3. Implement the client region-entry **banner** + per-zone **ambient audio** (client reads `RegionDefinitions.ZoneAt(playerX, playerZ)` each ~0.3s; swap ambient Sound + show banner on zone change). Add a placeholder ambient Sound per Ambient key.
+4. Playtest: walk the world (town → meadow goblins → forest wolves → hills ore → warren chieftain); verify enemies/resources sit in their zones on a difficulty gradient, banners/audio fire, existing loop still works, no console errors; desktop + mobile viewport. Regression-check the full loop.
+5. Independent evaluator subagent grades Phase 1 vs the DoD rubric using screenshots + runtime state; fix findings; then advance to Phase 2.
+
+Repo prep already landed: RegionIds/RegionDefinitions (+test, 22 suites green) and the run-ready scene-builder.
