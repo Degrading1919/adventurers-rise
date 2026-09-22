@@ -87,8 +87,9 @@ local definitions: { [string]: Definition } = {
 	armor_iron_helm = definition("armor_iron_helm", "Discrete", equipment(EquipmentSlots.Head, 1), nil, nil, armor(0.04)),
 	armor_iron_body = definition("armor_iron_body", "Discrete", equipment(EquipmentSlots.Body, 1), nil, nil, armor(0.07)),
 	armor_iron_legs = definition("armor_iron_legs", "Discrete", equipment(EquipmentSlots.Legs, 1), nil, nil, armor(0.05)),
-	-- Tier-2 steel armour set: out-protects iron (full set 0.24 vs iron's 0.16) to gate the harder,
-	-- deeper zones. Crafted from Steel Bars (Iron Bar + Coal), so it sits behind the second resource.
+	-- Tier-2 steel armour set: out-protects iron (full set 0.24 vs iron's 0.16) so the player survives
+	-- noticeably longer in the harder, deeper zones (a soft easing, not a hard gate). Crafted from Steel
+	-- Bars (Iron Bar + Coal), so it sits behind the second resource.
 	armor_steel_helm = definition("armor_steel_helm", "Discrete", equipment(EquipmentSlots.Head, 2), nil, nil, armor(0.06)),
 	armor_steel_body = definition("armor_steel_body", "Discrete", equipment(EquipmentSlots.Body, 2), nil, nil, armor(0.10)),
 	armor_steel_legs = definition("armor_steel_legs", "Discrete", equipment(EquipmentSlots.Legs, 2), nil, nil, armor(0.08)),

@@ -469,10 +469,21 @@ function Interface.New(player: Player)
 			local recipeId = recipe.RecipeId
 			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 74), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, forgeList)
 			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			-- Tell the player what the craft is FOR: armour outputs show their mitigation, weapons their
+			-- damage, so the ladder (iron -> steel) reads as a real upgrade on the recipe list itself.
+			local outDef = ItemDefinitions.ById[recipe.OutputItemId]
+			local outStat = ""
+			if outDef then
+				if outDef.Armor then
+					outStat = ("   ·  %d%% armour"):format(math.floor(outDef.Armor.DamageReduction * 100 + 0.5))
+				elseif outDef.Melee then
+					outStat = ("   ·  %d dmg"):format(outDef.Melee.Damage)
+				end
+			end
 			make("TextLabel", {
 				Size = UDim2.new(1, -12, 0, 18), Position = UDim2.new(0, 8, 0, 5), BackgroundTransparency = 1,
 				Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-				Text = ("%s   (Smith Lv %d)"):format(itemLabel(recipe.OutputItemId), recipe.RequiredSmithingLevel),
+				Text = ("%s   (Smith Lv %d)%s"):format(itemLabel(recipe.OutputItemId), recipe.RequiredSmithingLevel, outStat),
 			}, row)
 			-- Authoritative input requirements, straight from the read model.
 			local inputParts = {}
@@ -532,6 +543,23 @@ function Interface.New(player: Player)
 		local order2 = 0
 
 		gearHeader("EQUIPMENT", order2); order2 += 1
+		-- Make the Defense/armour reward legible: the authoritative mitigation the server applies (Mastery
+		-- + equipped armour), plus the armour-only share, as plain percentages. Without this the player
+		-- crafts a full set and sees no number anywhere.
+		local defense = lastState.Defense
+		if type(defense) == "table" then
+			local totalPct = math.floor((tonumber(defense.DamageReduction) or 0) * 100 + 0.5)
+			local armorPct = math.floor((tonumber(defense.ArmorDamageReduction) or 0) * 100 + 0.5)
+			local defenseText = if armorPct > 0
+				then ("Damage reduction: %d%%   (armour %d%%)"):format(totalPct, armorPct)
+				else ("Damage reduction: %d%%"):format(totalPct)
+			make("TextLabel", {
+				Size = UDim2.new(1, -6, 0, 22), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 13,
+				TextColor3 = if totalPct > 0 then COLORS.Accent else COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = defenseText, LayoutOrder = order2,
+			}, gearList)
+			order2 += 1
+		end
 		local equippable: { { InstanceId: string, DefinitionId: string, SlotId: string } } = {}
 		for instanceId, item in items do
 			local def = ItemDefinitions.ById[item.DefinitionId]
@@ -550,10 +578,21 @@ function Interface.New(player: Player)
 			local isEquipped = type(slotEquipped) == "table" and slotEquipped.InstanceId == entry.InstanceId
 			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 36), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, gearList)
 			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			-- Show the piece's own contribution so the ladder is self-explanatory: armour pieces read their
+			-- DamageReduction, weapons their attack damage. Presentation only; ItemDefinitions is already local.
+			local entryDef = ItemDefinitions.ById[entry.DefinitionId]
+			local statSuffix = ""
+			if entryDef then
+				if entryDef.Armor then
+					statSuffix = ("  ·  %d%% armour"):format(math.floor(entryDef.Armor.DamageReduction * 100 + 0.5))
+				elseif entryDef.Melee then
+					statSuffix = ("  ·  %d dmg"):format(entryDef.Melee.Damage)
+				end
+			end
 			make("TextLabel", {
 				Size = UDim2.new(1, -96, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
 				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-				Text = ("%s  (%s)"):format(itemLabel(entry.DefinitionId), SLOT_LABELS[entry.SlotId] or entry.SlotId),
+				Text = ("%s  (%s)%s"):format(itemLabel(entry.DefinitionId), SLOT_LABELS[entry.SlotId] or entry.SlotId, statSuffix),
 			}, row)
 			local act = make("TextButton", {
 				Size = UDim2.new(0, 84, 0, 28), Position = UDim2.new(1, -88, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),

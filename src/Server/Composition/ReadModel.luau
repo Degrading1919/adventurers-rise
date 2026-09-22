@@ -29,6 +29,9 @@ export type Ascension = {
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
 export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
 export type Onboarding = { read GetView: (number) -> (any?, string?) }
+-- The effective incoming-damage mitigation EnemyCombat applies (Defense Mastery + equipped armour),
+-- plus the equipped-armour-only portion, as a read-only presentation figure. Cannot fail.
+export type DefenseSummary = (number) -> { Total: number, Armor: number }
 
 export type Services = {
 	Economy: Economy,
@@ -41,6 +44,7 @@ export type Services = {
 	OfflineTraining: OfflineTraining,
 	PlayerHealth: PlayerHealth,
 	Onboarding: Onboarding,
+	DefenseSummary: DefenseSummary,
 }
 
 local SLICE_SKILL_IDS = { SkillIds.Melee, SkillIds.Defense, SkillIds.Mining, SkillIds.Smithing }
@@ -135,6 +139,11 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			return nil, healthReason
 		end
 
+		-- Read-only mitigation figures so the client can make the Defense/armour reward legible: Total is
+		-- what EnemyCombat actually applies (Mastery + armour, clamped); ArmorDamageReduction is the
+		-- equipped-gear-only share. Both are fractions in [0, ceiling]; presentation only.
+		local defense = services.DefenseSummary(userId)
+
 		-- Sanitized onboarding view: the current guided step (title/hint/progress/target) or a completion
 		-- marker. The server derives completion authoritatively; raw progression flags never appear here.
 		local onboarding, onboardingReason = services.Onboarding.GetView(userId)
@@ -213,6 +222,7 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 				AdeptProgress = adeptProgress,
 			},
 			Health = health,
+			Defense = { DamageReduction = defense.Total, ArmorDamageReduction = defense.Armor },
 			Shop = shop,
 			Recipes = recipes,
 			GatheringNodes = gatheringNodes,

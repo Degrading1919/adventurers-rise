@@ -606,6 +606,14 @@ test("equipped iron armour reduces incoming enemy damage through the composed de
 	assert(after.Damage < baselineDamage, "armour must reduce incoming damage")
 	local expected = baselineDamage * (1 - 0.16)
 	assert(math.abs(after.Damage - expected) < 1e-6, "expected " .. tostring(expected) .. " got " .. tostring(after.Damage))
+
+	-- Legibility: the read model must surface the same mitigation so the client can show it. With no
+	-- Defense Mastery, the total equals the armour-only share (0.16), both as [0,1] fractions.
+	local state = request(f, 7, RequestIds.StateGet, nil)
+	assert(state.Ok, state.Reason)
+	assert(type(state.Result.Defense) == "table", "read model must expose a Defense block")
+	assert(math.abs(state.Result.Defense.ArmorDamageReduction - 0.16) < 1e-6, "read model armour reduction should be 0.16")
+	assert(math.abs(state.Result.Defense.DamageReduction - 0.16) < 1e-6, "read model total reduction should be 0.16")
 end)
 
 test("a normal Goblin's death pays its authoritative Gold exactly once", function()
