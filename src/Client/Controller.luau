@@ -100,7 +100,11 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		return best, bestDist
 	end
 
-	local BOSS_DEFINITION_ID = "enemy_goblin_chieftain"
+	-- Shared-boss archetypes get a boss health bar. Data-driven so a new boss only adds a row.
+	local BOSS_DEFINITION_IDS: { [string]: boolean } = {
+		enemy_goblin_chieftain = true,
+		enemy_bandit_warlord = true,
+	}
 	local BOSS_ENGAGE_RADIUS = 90
 
 	-- Presentation-only enemy display names (stable IDs stay authoritative). A missing id falls back to
@@ -109,6 +113,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		enemy_goblin = "Goblin",
 		enemy_goblin_chieftain = "Goblin Chieftain",
 		enemy_wolf = "Wolf",
+		enemy_hobgoblin = "Hobgoblin",
+		enemy_bandit = "Bandit",
+		enemy_bandit_warlord = "Bandit Warlord",
 	}
 	local function enemyBaseName(defId: any): string
 		return (type(defId) == "string" and ENEMY_DISPLAY_NAMES[defId]) or "Enemy"
@@ -145,7 +152,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 						target = enemyInfo(model)
 						targetDist = d
 					end
-					if model:GetAttribute("EnemyDefinitionId") == BOSS_DEFINITION_ID and d <= BOSS_ENGAGE_RADIUS and (bossDist == nil or d < bossDist) then
+					if BOSS_DEFINITION_IDS[model:GetAttribute("EnemyDefinitionId")] and d <= BOSS_ENGAGE_RADIUS and (bossDist == nil or d < bossDist) then
 						boss = enemyInfo(model)
 						bossDist = d
 					end
@@ -320,7 +327,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		iface.SetCombat({
 			-- Name is the base label; the readout appends the level itself (so it never shows twice).
 			Target = if target then { Name = enemyBaseName(target.DefinitionId), Level = target.Level, Health = target.Health, MaxHealth = target.MaxHealth } else nil,
-			Boss = if boss then { Name = "Goblin Chieftain", Level = boss.Level, Health = boss.Health, MaxHealth = boss.MaxHealth } else nil,
+			Boss = if boss then { Name = enemyBaseName(boss.DefinitionId), Level = boss.Level, Health = boss.Health, MaxHealth = boss.MaxHealth } else nil,
 		})
 		targetHighlight.Adornee = currentTargetModel
 		targetHighlight.Enabled = currentTargetModel ~= nil

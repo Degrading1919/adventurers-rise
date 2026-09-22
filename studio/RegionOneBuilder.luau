@@ -178,27 +178,42 @@ local oldGround = AR:FindFirstChild("Ground")
 if oldGround then oldGround:Destroy() end
 
 -- ---------- 4) relocate enemy-territory markers + ore nodes into their zones ----------
--- levelMin/levelMax give a REAL difficulty-by-distance gradient (World reads them; Enemies.Create
--- clamps into the archetype band). Nil = archetype default (e.g. the fixed-level boss).
-local function setTerritory(id: string, centre: Vector3, radius: number, population: number?, levelMin: number?, levelMax: number?)
+-- Creates-or-updates a territory marker fully (the builder owns all territory placement). levelMin/Max
+-- give a REAL difficulty-by-distance gradient (World reads them; Enemies.Create clamps into the
+-- archetype band; nil = archetype default). tuning holds optional movement overrides (bosses stay put).
+local TUNING_KEYS = { "RoamRadius", "LeashRadius", "AggroRadius", "DeaggroRadius", "RoamSpeed", "ChaseSpeed" }
+local function ensureTerritory(id, defId, centre, radius, population, levelMin, levelMax, tuning)
 	local terr = AR:FindFirstChild("Territories")
-	if not terr then return end
-	for _, m in ipairs(terr:GetChildren()) do
-		if m:GetAttribute("TerritoryId") == id and m:IsA("BasePart") then
-			m.Position = centre
-			m:SetAttribute("Radius", radius)
-			if population then m:SetAttribute("Population", population) end
-			m:SetAttribute("LevelMin", levelMin)
-			m:SetAttribute("LevelMax", levelMax)
-		end
+	if not terr then terr = Instance.new("Folder"); terr.Name = "Territories"; terr.Parent = AR end
+	local m
+	for _, c in ipairs(terr:GetChildren()) do if c:GetAttribute("TerritoryId") == id then m = c end end
+	if not m then
+		m = Instance.new("Part")
+		m.Name = "Territory_" .. id
+		m.Anchored = true; m.CanCollide = false; m.CanQuery = false; m.CanTouch = false; m.Transparency = 1; m.Size = Vector3.new(2, 1, 2)
+		CollectionService:AddTag(m, "AR_EnemyTerritory")
+		m.Parent = terr
 	end
+	m.Position = centre
+	m:SetAttribute("TerritoryId", id)
+	m:SetAttribute("EnemyDefinitionId", defId)
+	m:SetAttribute("Radius", radius)
+	m:SetAttribute("Population", population)
+	m:SetAttribute("LevelMin", levelMin)
+	m:SetAttribute("LevelMax", levelMax)
+	for _, k in ipairs(TUNING_KEYS) do m:SetAttribute(k, tuning and tuning[k] or nil) end
 end
 -- Markers sit at the terrain surface (SURFACE) so enemies seat on top of the ground, not sunk into it.
 local SURFACE = 2
-setTerritory("wolf_den", Vector3.new(0, SURFACE, 255), 52, 5, 2, 4) -- Whispering Woods (easiest starter)
-setTerritory("goblin_camp", Vector3.new(160, SURFACE, 25), 46, 5, 3, 4) -- near-town starter goblins
-setTerritory("goblin_ruins", Vector3.new(255, SURFACE, -60), 44, 4, 6, 8) -- deeper, bolder goblins
-setTerritory("chieftain_arena", Vector3.new(330, SURFACE, 10), 8, 1, nil, nil) -- Warren boss (fixed Lv10)
+local BOSS_TUNING = { RoamRadius = 6, LeashRadius = 34, AggroRadius = 30 } -- bosses hold their ground/arena
+-- Region I populations on a radial difficulty gradient (easiest near town, hardest deep/out):
+ensureTerritory("wolf_den", "enemy_wolf", Vector3.new(0, SURFACE, 255), 52, 5, 2, 4)             -- Whispering Woods (starter)
+ensureTerritory("goblin_camp", "enemy_goblin", Vector3.new(160, SURFACE, 25), 46, 5, 3, 4)        -- near-town goblins
+ensureTerritory("goblin_ruins", "enemy_goblin", Vector3.new(255, SURFACE, -60), 44, 4, 6, 8)      -- deeper, bolder goblins
+ensureTerritory("hobgoblin_hollow", "enemy_hobgoblin", Vector3.new(0, SURFACE, -360), 48, 4, 6, 10) -- deep Ironrock Hollow (past the mine)
+ensureTerritory("bandit_camp", "enemy_bandit", Vector3.new(-230, SURFACE, 40), 50, 4, 5, 9)        -- Ashen Ruins
+ensureTerritory("warlord_tower", "enemy_bandit_warlord", Vector3.new(-270, SURFACE, 0), 8, 1, nil, nil, BOSS_TUNING) -- ruined watchtower boss
+ensureTerritory("chieftain_arena", "enemy_goblin_chieftain", Vector3.new(330, SURFACE, 10), 8, 1, nil, nil, BOSS_TUNING) -- Warren boss
 -- Players spawn on the surface, not inside the terrain.
 local spawn = workspace:FindFirstChild("AR_Spawn")
 if spawn and spawn:IsA("BasePart") then spawn.Position = Vector3.new(spawn.Position.X, SURFACE, spawn.Position.Z) end

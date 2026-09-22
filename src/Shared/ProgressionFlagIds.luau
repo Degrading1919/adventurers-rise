@@ -11,6 +11,7 @@
 -- kill (GoblinChieftainDefeated, reused) -- deliberately have no dedicated flag.
 local ids: { [string]: string } = {
 	GoblinChieftainDefeated = "flag_boss_goblin_chieftain_defeated",
+	BanditWarlordDefeated = "flag_boss_bandit_warlord_defeated",
 	StarterKitGranted = "flag_starter_kit_granted",
 	OnboardingStarterFocusAcknowledged = "flag_onboarding_starter_focus_acknowledged",
 	OnboardingTrainingRewardGranted = "flag_onboarding_training_reward_granted",

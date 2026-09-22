@@ -53,6 +53,9 @@ local definitions: { [string]: Definition } = {
 	tool_pickaxe_upgraded = definition("tool_pickaxe_upgraded", "Discrete", equipment(EquipmentSlots.Tool, 2), nil, mining(2)),
 	-- Rare Goblin Chieftain boss material; the minimum new item ID needed to demonstrate rare boss loot.
 	item_chieftain_fang = definition("item_chieftain_fang", "Stackable"),
+	-- Rare Bandit Warlord boss material (the ruined-tower captain's seal); the minimum new item ID for
+	-- the second boss's rare drop, mirroring the Chieftain Fang.
+	item_warlord_seal = definition("item_warlord_seal", "Stackable"),
 }
 
 return table.freeze({

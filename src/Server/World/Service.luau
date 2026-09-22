@@ -42,6 +42,25 @@ local ENEMY_DISPLAY_NAMES: { [string]: string } = {
 	enemy_goblin = "Goblin",
 	enemy_goblin_chieftain = "Goblin Chieftain",
 	enemy_wolf = "Wolf",
+	enemy_hobgoblin = "Hobgoblin",
+	enemy_bandit = "Bandit",
+	enemy_bandit_warlord = "Bandit Warlord",
+}
+-- Shared-boss archetypes get the tall boss silhouette (and the client shows a boss bar). Data-driven so
+-- new bosses only add a row, never touch logic.
+local BOSS_DEFINITION_IDS: { [string]: boolean } = {
+	enemy_goblin_chieftain = true,
+	enemy_bandit_warlord = true,
+}
+-- Provisional placeholder silhouettes/colours for archetypes with no production mesh template. Stored
+-- as plain number tuples (not Vector3/Color3) so the module loads headlessly in tests; the box builder
+-- constructs the engine types at use time.
+local ENEMY_BOX_APPEARANCE: { [string]: { Size: { number }, Color: { number } } } = {
+	enemy_goblin_chieftain = { Size = { 6, 10, 6 }, Color = { 120, 20, 20 } },
+	enemy_bandit_warlord = { Size = { 5.5, 9, 5.5 }, Color = { 96, 44, 40 } },
+	enemy_wolf = { Size = { 2.6, 3, 5 }, Color = { 85, 85, 95 } },
+	enemy_hobgoblin = { Size = { 4, 6.5, 4 }, Color = { 96, 112, 58 } },
+	enemy_bandit = { Size = { 3, 5.5, 3 }, Color = { 122, 96, 70 } },
 }
 
 -- Territory defaults when a marker omits an attribute, and how far past a territory's edge an enemy may
@@ -474,12 +493,11 @@ function Service.New(runtime: Runtime)
 			body.Name = "Body"
 			body.Anchored = true
 			body.CanCollide = false
-			-- Provisional silhouettes so archetypes read as distinct even without production art: a tall
-			-- red boss, a low elongated grey wolf, a green goblin/other.
-			local isBoss = definitionId == "enemy_goblin_chieftain"
-			local isWolf = definitionId == "enemy_wolf"
-			body.Size = if isBoss then Vector3.new(6, 10, 6) elseif isWolf then Vector3.new(2.6, 3, 5) else Vector3.new(3, 5, 3)
-			body.Color = if isBoss then Color3.fromRGB(120, 20, 20) elseif isWolf then Color3.fromRGB(85, 85, 95) else Color3.fromRGB(70, 130, 60)
+			-- Provisional silhouettes so archetypes read as distinct even without production art, data-driven
+			-- from ENEMY_BOX_APPEARANCE (default = a green goblin-sized box).
+			local appearance = ENEMY_BOX_APPEARANCE[definitionId]
+			body.Size = if appearance then Vector3.new(appearance.Size[1], appearance.Size[2], appearance.Size[3]) else Vector3.new(3, 5, 3)
+			body.Color = if appearance then Color3.fromRGB(appearance.Color[1], appearance.Color[2], appearance.Color[3]) else Color3.fromRGB(70, 130, 60)
 			body.Material = Enum.Material.SmoothPlastic
 			-- Sit the body on the marker (plus its territory offset) so its centre is above the floor.
 			body.CFrame = marker.CFrame + Vector3.new(spawnOffset.X, body.Size.Y / 2, spawnOffset.Z)

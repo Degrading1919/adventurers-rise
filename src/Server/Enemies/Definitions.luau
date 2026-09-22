@@ -89,6 +89,22 @@ local definitions: { [string]: Definition } = {
 	-- Wolf: a lower-tier, fragile, fast pack predator occupying its own territory (a distinct
 	-- population from the goblins). Provisional balance, like every other value here.
 	[EnemyIds.Wolf] = definition(EnemyIds.Wolf, "Wolf", levelRange(2, 5), scaling(18, 4, 3, 1, 2, 1), aggression(-4)),
+	-- Hobgoblin: a bigger, tougher goblinoid holding the rocky southern hills. Mid-tier: sturdier and
+	-- hits harder than a Goblin, richer Gold.
+	[EnemyIds.Hobgoblin] = definition(EnemyIds.Hobgoblin, "Hobgoblin", levelRange(6, 12), scaling(60, 8, 7, 2, 6, 2), aggression(-2)),
+	-- Bandit: a human rogue haunting the western ruins. Glassier than a Hobgoblin but hits hard and is
+	-- aggressive toward players who have not far outgrown it.
+	[EnemyIds.Bandit] = definition(EnemyIds.Bandit, "Bandit", levelRange(5, 11), scaling(45, 6, 8, 2, 8, 2), aggression(-3)),
+	-- Bandit Warlord: Region I's second shared boss (the ruined-watchtower captain). Fixed level,
+	-- stronger than any normal roll, participation reward model like the Goblin Chieftain.
+	[EnemyIds.BanditWarlord] = definition(
+		EnemyIds.BanditWarlord,
+		"Bandit Warlord",
+		levelRange(12, 12),
+		scaling(520, 0, 26, 0, 70, 0),
+		aggression(-8),
+		bossMetadata()
+	),
 	[EnemyIds.GoblinChieftain] = definition(
 		EnemyIds.GoblinChieftain,
 		"Goblin Chieftain",

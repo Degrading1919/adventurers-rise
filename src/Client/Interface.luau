@@ -24,6 +24,7 @@ local ITEM_LABELS: { [string]: string } = {
 	item_iron_ore = "Iron Ore",
 	item_iron_bar = "Iron Bar",
 	item_chieftain_fang = "Goblin Chieftain Fang",
+	item_warlord_seal = "Bandit Warlord Seal",
 	weapon_sword_starter = "Starter Sword",
 	weapon_sword_upgraded = "Upgraded Sword",
 	tool_pickaxe_basic = "Basic Pickaxe",
@@ -36,6 +37,7 @@ end
 -- resource. The item IDs and their authority stay server-owned; this only changes how they look.
 local RARE_ITEMS: { [string]: boolean } = {
 	item_chieftain_fang = true,
+	item_warlord_seal = true,
 }
 
 local COLORS = {
@@ -227,7 +229,7 @@ function Interface.New(player: Player)
 	end
 
 	-- Presentation-only boss labels; stable IDs stay authoritative.
-	local BOSS_LABELS: { [string]: string } = { enemy_goblin_chieftain = "Goblin Chieftain" }
+	local BOSS_LABELS: { [string]: string } = { enemy_goblin_chieftain = "Goblin Chieftain", enemy_bandit_warlord = "Bandit Warlord" }
 	local function bossLabel(id: any): string
 		return (type(id) == "string" and BOSS_LABELS[id]) or "the boss"
 	end
