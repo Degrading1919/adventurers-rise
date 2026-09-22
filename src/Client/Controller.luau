@@ -399,6 +399,8 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		-- Region-entry banner: announce a newly entered named zone (leaving to open wilderness is quiet).
 		local zone = RegionDefinitions.ZoneAt(position.X, position.Z)
 		local zid = if zone then zone.Id else nil
+		-- Keep the map's live player marker in sync (no-op when the Map panel is closed).
+		iface.UpdateMapMarker(position.X, position.Z)
 		if zid ~= currentZoneId then
 			currentZoneId = zid
 			if zone then

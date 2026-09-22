@@ -11,6 +11,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local SkillIds = require(Shared:WaitForChild("SkillIds"))
 local EquipmentSlots = require(Shared:WaitForChild("EquipmentSlots"))
 local ItemDefinitions = require(Shared:WaitForChild("ItemDefinitions"))
+local RegionDefinitions = require(Shared:WaitForChild("RegionDefinitions"))
 
 -- Presentation-only labels (the client owns presentation; stable IDs stay authoritative).
 local SKILL_LABELS: { [string]: string } = {
@@ -362,6 +363,7 @@ function Interface.New(player: Player)
 	local gearPanel, gearContent = panel("Gear — Inventory")
 	local ascendPanel, ascendContent = panel("Ascension")
 	local offlinePanel, offlineContent = panel("Offline Training")
+	local mapPanel, mapContent = panel("Map — The Marchlands", 340)
 	local shopPanel, shopContent = panel("Shop", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
 	local skillsPanel, skillsContent = panel("Skills — Progress", 320)
@@ -376,6 +378,7 @@ function Interface.New(player: Player)
 		gearPanel.Visible = false
 		ascendPanel.Visible = false
 		offlinePanel.Visible = false
+		mapPanel.Visible = false
 		shopPanel.Visible = false
 		masteryPanel.Visible = false
 		skillsPanel.Visible = false
@@ -1482,6 +1485,74 @@ function Interface.New(player: Player)
 	make("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, menuFrame)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, menuFrame)
 
+	-- ---- Map panel ----
+	-- A schematic top-down map of Region I: each zone plotted by its world centre (RegionDefinitions),
+	-- discovered vs unknown from the read-model Discovery set, with a live player marker. Client-only
+	-- presentation over data the server already owns.
+	local mapArea = make("Frame", {
+		Size = UDim2.new(1, 0, 1, -6), Position = UDim2.new(0, 0, 0, 3), BackgroundColor3 = COLORS.PanelAlt,
+		ClipsDescendants = true,
+	}, mapContent)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, mapArea)
+	-- Difficulty hue by zone tier (safe -> deadly), so the map reads as a gradient outward from town.
+	local TIER_COLORS: { [number]: Color3 } = {
+		[1] = Color3.fromRGB(120, 200, 130),
+		[2] = Color3.fromRGB(210, 200, 110),
+		[3] = Color3.fromRGB(220, 150, 90),
+		[4] = Color3.fromRGB(220, 110, 100),
+	}
+	-- Plotted world half-extent (studs); covers every zone centre with a margin.
+	local MAP_WORLD_EXTENT = 380
+	local function worldToMapScale(x: number, z: number): (number, number)
+		-- East (+x) -> right; North (+z) -> up. Clamped so a far-flung marker stays on the map.
+		local u = math.clamp((x + MAP_WORLD_EXTENT) / (2 * MAP_WORLD_EXTENT), 0.04, 0.96)
+		local v = math.clamp((MAP_WORLD_EXTENT - z) / (2 * MAP_WORLD_EXTENT), 0.06, 0.94)
+		return u, v
+	end
+	-- Persistent player marker (repositioned live by UpdateMapMarker), above the zone dots.
+	local playerDot = make("Frame", {
+		Size = UDim2.new(0, 12, 0, 12), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = COLORS.Accent,
+		BorderSizePixel = 0, ZIndex = 6, Visible = false,
+	}, mapArea)
+	make("UICorner", { CornerRadius = UDim.new(1, 0) }, playerDot)
+	make("UIStroke", { Color = COLORS.Text, Thickness = 1.5 }, playerDot)
+
+	local function renderMap()
+		for _, child in mapArea:GetChildren() do
+			if child ~= playerDot and (child:IsA("Frame") or child:IsA("TextLabel")) then
+				child:Destroy()
+			end
+		end
+		local discovered = (lastState and lastState.Discovery and lastState.Discovery.DiscoveredZoneIds) or {}
+		for _, zone in RegionDefinitions.Zones do
+			local u, v = worldToMapScale(zone.CenterX, zone.CenterZ)
+			local known = zone.Safe == true or discovered[zone.Id] == true
+			local dot = make("Frame", {
+				Size = UDim2.new(0, 14, 0, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
+				BackgroundColor3 = if known then (TIER_COLORS[zone.Tier] or COLORS.Accent) else COLORS.Dim,
+				BorderSizePixel = 0, ZIndex = 3,
+			}, mapArea)
+			make("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+			make("TextLabel", {
+				Size = UDim2.new(0, 130, 0, 14), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(u, 0, v, 9),
+				BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
+				TextColor3 = if known then COLORS.Text else COLORS.Dim,
+				Text = if known then zone.DisplayName else "???",
+				ZIndex = 3,
+			}, mapArea)
+		end
+	end
+
+	-- Live player marker, driven cheaply from the Controller's proximity loop (only moves a frame).
+	function iface.UpdateMapMarker(x: number, z: number)
+		if not mapPanel.Visible then
+			return
+		end
+		local u, v = worldToMapScale(x, z)
+		playerDot.Position = UDim2.new(u, 0, v, 0)
+		playerDot.Visible = true
+	end
+
 	local function menuEntry(text: string, order2: number, open: () -> ()): TextButton
 		local b = make("TextButton", {
 			Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = COLORS.Button, AutoButtonColor = true,
@@ -1500,6 +1571,7 @@ function Interface.New(player: Player)
 	local skillsMenuEntry = menuEntry("Skills", 2, function() renderSkills(); skillsPanel.Visible = true end)
 	menuEntry("Ascend", 3, function() renderAscend(); ascendPanel.Visible = true end)
 	menuEntry("Offline", 4, function() renderOffline(); offlinePanel.Visible = true end)
+	menuEntry("Map", 5, function() renderMap(); mapPanel.Visible = true end)
 
 	menuBtn.Activated:Connect(function()
 		if menuFrame.Visible then
