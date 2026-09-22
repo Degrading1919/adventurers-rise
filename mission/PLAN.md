@@ -12,10 +12,13 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phase 1 (The World) — BUILT + VALIDATED; evaluator findings pending
+## CURRENT PHASE: Phase 1 DONE (evaluator fix cycle applied). Starting Phase 2.
 
-## NEXT ACTION
-1. Read the independent evaluator's Phase-1 report; apply the high-value fixes (likely: prop density/collision & world "convincing-ness", difficulty-gradient realism, banner contrast, fresh-player onboarding across the bigger world). Re-playtest.
-2. Advance to **Phase 2 — enemy ecology + combat feel**: add Region I families (Bandit in Ashen Ruins, Hobgoblin in Ironrock Hollow) as enemy Definitions + territories; add the 2nd boss (Bandit Warlord) on the boss framework; add a loot-table system (enemies drop region resources/gear); add combat feedback (hit flash/sound, attack swing, death fx). Each: implement → Studio-integrate → playtest → independent critic → fix.
+## NEXT ACTION — Phase 2: enemy ecology + combat feel
+1. **New archetypes (data):** add Bandit (Ashen Ruins) + Hobgoblin (Ironrock Hollow) to `Enemies/Definitions` + `Shared/EnemyIds` (higher bands than goblins); placeholder box/mesh silhouettes; client display names. Add their territories via the builder (with LevelMin/Max) so the two currently-combat-empty tier-3 zones become real threats. Test.
+2. **2nd boss:** Bandit Warlord on the reusable boss framework (Bosses/Definitions), sited in the Ashen Ruins ruined tower; participation/personal-reward like the Chieftain. Test.
+3. **Loot tables:** a pure, tested loot-roll module + per-archetype tables (enemies drop region materials/gold, bosses drop better); wire into the combat/reward path (server-authoritative). Test.
+4. **Combat feel:** hit flash + hit SFX + attack swing + enemy death fx (client presentation on authoritative hits).
+Each item: implement → Studio-integrate → playtest → fix. Full independent evaluator at Phase-2 end (re-grades world + ecology vs the rubric, incl. whether criterion 2 needs the deferred terrain-elevation pass).
 
-Remember: SAVE THE PLACE (Studio-owned world is not in Git). Fresh-context bootstrap in MISSION.md.
+Remember: **SAVE THE PLACE** (Studio-owned world not in Git). Fresh-context bootstrap in MISSION.md.
