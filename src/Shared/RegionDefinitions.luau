@@ -53,10 +53,10 @@ local regions: { [string]: Region } = {
 -- Ordered so ZoneAt's nearest-center tiebreak is deterministic; all belong to The Marchlands.
 local zones: { Zone } = {
 	zone(ZoneId.Town, RegionId.Marchlands, "Havenbrook", 0, 0, 150, 1, true, "town", 1, "A safe frontier town: train, forge, and trade."),
-	zone(ZoneId.Meadow, RegionId.Marchlands, "Green Meadows", 260, 0, 210, 2, false, "meadow", 3, "Goblins roam the eastern farmland."),
-	zone(ZoneId.Forest, RegionId.Marchlands, "Whispering Woods", 0, 260, 210, 2, false, "forest", 3, "Wolves hunt the northern woods."),
-	zone(ZoneId.Hills, RegionId.Marchlands, "Ironrock Hollow", 0, -270, 210, 3, false, "hills", 6, "Iron veins and hardier foes lie to the south."),
-	zone(ZoneId.Ruins, RegionId.Marchlands, "Ashen Ruins", -270, 0, 210, 3, false, "ruins", 6, "Bandits haunt the crumbling western frontier."),
+	zone(ZoneId.Forest, RegionId.Marchlands, "Whispering Woods", 0, 260, 210, 2, false, "forest", 2, "Wolves prowl the quiet northern woods."),
+	zone(ZoneId.Meadow, RegionId.Marchlands, "Green Meadows", 260, 0, 210, 2, false, "meadow", 3, "Goblins raid the eastern farmland — bolder the deeper you go."),
+	zone(ZoneId.Hills, RegionId.Marchlands, "Ironrock Hollow", 0, -270, 210, 2, false, "hills", 1, "Rich iron veins run through the southern rock."),
+	zone(ZoneId.Ruins, RegionId.Marchlands, "Ashen Ruins", -270, 0, 210, 3, false, "ruins", 6, "Crumbling ruins on the old frontier — something waits here."),
 	zone(ZoneId.Warren, RegionId.Marchlands, "Goblin Warren", 330, 0, 95, 4, false, "warren", 8, "The Goblin Chieftain's deep lair."),
 }
 local zoneById: { [string]: Zone } = {}

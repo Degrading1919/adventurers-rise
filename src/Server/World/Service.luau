@@ -29,6 +29,10 @@ local SHOP_TAG = "AR_Shop"
 local ATTR_TERRITORY_ID = "TerritoryId"
 local ATTR_TERRITORY_RADIUS = "Radius"
 local ATTR_TERRITORY_POPULATION = "Population"
+-- Optional per-territory level band (biases the roll within the archetype's allowed range, giving a
+-- real difficulty-by-distance gradient: near-town territories spawn low, deeper ones spawn high).
+local ATTR_TERRITORY_LEVEL_MIN = "LevelMin"
+local ATTR_TERRITORY_LEVEL_MAX = "LevelMax"
 -- Optional per-territory movement-tuning overrides (any of EnemyAI.Config's keys); absent => defaults.
 local TERRITORY_TUNING_KEYS = { "AggroRadius", "DeaggroRadius", "LeashRadius", "RoamRadius", "RoamSpeed", "ChaseSpeed", "ArriveRadius", "RoamPauseMin", "RoamPauseMax", "AttackRange" }
 
@@ -82,7 +86,7 @@ local ENEMY_ATTACK_RANGE = 10
 local ENEMY_ATTACK_COOLDOWN = 2
 
 export type Enemies = {
-	read Create: (string) -> (any?, string?),
+	read Create: (string, { Minimum: number, Maximum: number }?) -> (any?, string?),
 	read GetSnapshot: (string) -> (any?, string?),
 	read Remove: (string) -> (any?, string?),
 }
@@ -143,6 +147,8 @@ type EnemyRecord = {
 	AIConfig: EnemyAI.Config,
 	AIMemory: EnemyAI.Memory,
 	BobPhase: number,
+	-- The territory's level band, reused on respawn so a zone keeps its difficulty (nil = archetype default).
+	LevelRange: { Minimum: number, Maximum: number }?,
 }
 
 local Service = {}
@@ -564,7 +570,7 @@ function Service.New(runtime: Runtime)
 		-- clearing it again here is defensive/idempotent, covering any path that retires an id directly.
 		lastAttackAt[previousId] = nil
 		enemyCombat.ClearEnemy(previousId)
-		local state, reason = enemies.Create(record.DefinitionId)
+		local state, reason = enemies.Create(record.DefinitionId, record.LevelRange)
 		if not state then
 			runtime.Warn(("[World] Respawn failed for %s: %s"):format(record.DefinitionId, tostring(reason)))
 			return
@@ -789,8 +795,8 @@ function Service.New(runtime: Runtime)
 
 		-- Creates one enemy of definitionId belonging to a territory (home + radius + movement config),
 		-- seated at a random point inside it, and registers its record with full movement state.
-		local function spawnEnemy(definitionId: string, marker: BasePart, home: Vector3, radius: number, config: EnemyAI.Config)
-			local state, reason = enemies.Create(definitionId)
+		local function spawnEnemy(definitionId: string, marker: BasePart, home: Vector3, radius: number, config: EnemyAI.Config, levelRange: { Minimum: number, Maximum: number }?)
+			local state, reason = enemies.Create(definitionId, levelRange)
 			if not state then
 				runtime.Warn(("[World] Enemy create failed for %s: %s"):format(definitionId, tostring(reason)))
 				return
@@ -813,6 +819,7 @@ function Service.New(runtime: Runtime)
 				AIConfig = config,
 				AIMemory = freshMemory(),
 				BobPhase = 0,
+				LevelRange = levelRange,
 			})
 		end
 
@@ -845,8 +852,14 @@ function Service.New(runtime: Runtime)
 					end
 					local config = EnemyAI.ResolveConfig(overrides)
 					local home = marker.Position
+					-- Optional per-territory level band (clamped into the archetype's range by Enemies.Create).
+					local levelMin = marker:GetAttribute(ATTR_TERRITORY_LEVEL_MIN)
+					local levelMax = marker:GetAttribute(ATTR_TERRITORY_LEVEL_MAX)
+					local levelRange = if type(levelMin) == "number" and type(levelMax) == "number"
+						then { Minimum = levelMin, Maximum = levelMax }
+						else nil
 					for _ = 1, population do
-						spawnEnemy(definitionId, marker, home, radius, config)
+						spawnEnemy(definitionId, marker, home, radius, config, levelRange)
 					end
 				end
 			end

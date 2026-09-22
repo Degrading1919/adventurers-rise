@@ -82,6 +82,31 @@ test("level rolls stay within the configured Goblin bounds and derive reusable s
 	equal(invalidReason, "InvalidEnemyLevel")
 end)
 
+test("Create biases the roll within a territory level band, always clamped into the archetype range", function()
+	local last: { min: number?, max: number? } = { min = nil, max = nil }
+	local i = 0
+	local service = Enemies.New({
+		NewRuntimeId = function() i += 1; return "lvl-" .. i end,
+		RollInteger = function(min, max) last.min, last.max = min, max; return min end,
+	})
+	-- An in-band override is used as-is (near-town vs deep territories differ).
+	service.Create(EnemyIds.Goblin, { Minimum = 5, Maximum = 7 })
+	equal(last.min, 5)
+	equal(last.max, 7)
+	-- An out-of-band override is clamped into the Goblin range (3..8) -- never rolls out of band.
+	service.Create(EnemyIds.Goblin, { Minimum = 1, Maximum = 100 })
+	equal(last.min, 3)
+	equal(last.max, 8)
+	-- A reversed override is normalized.
+	service.Create(EnemyIds.Goblin, { Minimum = 7, Maximum = 2 })
+	equal(last.min, 3)
+	equal(last.max, 7)
+	-- No override falls back to the archetype's full range.
+	service.Create(EnemyIds.Goblin)
+	equal(last.min, 3)
+	equal(last.max, 8)
+end)
+
 test("runtime enemies create, query, remove, and isolate their snapshots", function()
 	local service = enemyFixture({ "enemy-one", "enemy-two" }, { 3, 4 })
 	local first = assert(service.Create(EnemyIds.Goblin))

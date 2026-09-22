@@ -43,7 +43,7 @@ scenery.Parent = AR
 local function part(props: { [string]: any }): Part
 	local p = Instance.new("Part")
 	p.Anchored = true
-	p.CanCollide = props.CanCollide == true
+	p.CanCollide = props.CanCollide ~= false -- solid props collide by default; pass false for overhead leaves
 	p.CanQuery = false
 	p.CanTouch = false
 	p.Material = props.Material or M.SmoothPlastic
@@ -76,8 +76,11 @@ floor(0, -270, 380, 380, M.Rock) -- hills/mine (S)
 floor(0, -170, 220, 140, M.Ground) -- dirt approach to the mine
 floor(-270, 0, 360, 380, M.Ground) -- ruins frontier (W)
 floor(0, 0, 96, 96, M.Ground) -- town plaza
-floor(0, 0, 24, 300, M.Ground) -- N-S road
-floor(0, 0, 300, 24, M.Ground) -- E-W road
+-- Roads radiate from town out to each zone, so travel follows a route (not a featureless field).
+floor(0, 130, 16, 260, M.Ground) -- N path to Whispering Woods
+floor(0, -150, 16, 300, M.Ground) -- S path to Ironrock Hollow
+floor(140, 0, 280, 16, M.Ground) -- E path to Green Meadows / Warren
+floor(-150, 0, 300, 16, M.Ground) -- W path to Ashen Ruins
 for _, h in ipairs({
 	{ 480, 0, 95, 42, M.Rock }, { -480, 0, 95, 42, M.Rock },
 	{ 0, 480, 95, 36, M.Rock }, { 0, -480, 100, 50, M.Slate },
@@ -91,7 +94,7 @@ local function tree(pos: Vector3)
 	local trunk = part({ Size = Vector3.new(2, 12, 2), Color = Color3.fromRGB(96, 66, 42), Material = M.Wood,
 		CFrame = CFrame.new(pos + Vector3.new(0, 6, 0)) })
 	part({ Size = Vector3.new(12, 12, 12), Shape = Enum.PartType.Ball, Color = Color3.fromRGB(58, 120, 55),
-		Material = M.Grass, CFrame = CFrame.new(pos + Vector3.new(0, 14, 0)), Parent = scenery })
+		Material = M.Grass, CFrame = CFrame.new(pos + Vector3.new(0, 14, 0)), CanCollide = false, Parent = scenery })
 	return trunk
 end
 local function rock(pos: Vector3, s: number)
@@ -148,12 +151,35 @@ do
 	end
 end
 
+-- Central keep tower in Havenbrook: the tallest structure and a sightline anchor visible region-wide.
+do
+	local cx, cz = 0, -8
+	part({ Size = Vector3.new(22, 44, 22), Color = Color3.fromRGB(128, 122, 110), Material = M.Brick, CFrame = CFrame.new(cx, 22, cz) })
+	part({ Size = Vector3.new(27, 5, 27), Color = Color3.fromRGB(96, 60, 45), Material = M.Slate, CFrame = CFrame.new(cx, 46, cz) })
+	part({ Size = Vector3.new(6, 16, 6), Color = Color3.fromRGB(150, 60, 45), Material = M.Slate, CFrame = CFrame.new(cx, 55, cz) })
+	part({ Size = Vector3.new(2.5, 9, 2.5), Shape = Enum.PartType.Cylinder, Color = Color3.fromRGB(210, 190, 70), Material = M.Neon, CanCollide = false, CFrame = CFrame.new(cx, 64, cz) * CFrame.Angles(0, 0, math.rad(90)) })
+end
+-- Tall rock spires as sightline landmarks that frame the wild zones and break up the horizon.
+local function spire(pos, h, mat)
+	part({ Size = Vector3.new(10, h, 10), Color = Color3.fromRGB(96, 96, 104), Material = mat or M.Rock, CFrame = CFrame.new(pos + Vector3.new(0, h / 2, 0)) * CFrame.Angles(0.04, 0, 0.03) })
+	part({ Size = Vector3.new(6, h * 0.5, 6), Color = Color3.fromRGB(86, 86, 96), Material = mat or M.Rock, CFrame = CFrame.new(pos + Vector3.new(3, h * 0.85, -1)) * CFrame.Angles(0.12, 0, -0.06) })
+end
+spire(ZONES.hills + Vector3.new(-46, 0, -34), 46)
+spire(ZONES.hills + Vector3.new(50, 0, -12), 34)
+spire(ZONES.ruins + Vector3.new(-36, 0, 44), 42, M.Slate)
+spire(ZONES.warren + Vector3.new(0, 0, -50), 32)
+-- A little more life: bushes/rocks in the meadow, extra timber at the wood's edge.
+scatter(Vector3.new(220, 0, 15), 120, 10, function(p) rock(p, rng:NextInteger(3, 6)) end)
+scatter(Vector3.new(60, 0, 150), 55, 10, tree)
+
 -- ---------- 3) remove the old flat floor part (terrain replaces it) ----------
 local oldGround = AR:FindFirstChild("Ground")
 if oldGround then oldGround:Destroy() end
 
 -- ---------- 4) relocate enemy-territory markers + ore nodes into their zones ----------
-local function setTerritory(id: string, centre: Vector3, radius: number, population: number?)
+-- levelMin/levelMax give a REAL difficulty-by-distance gradient (World reads them; Enemies.Create
+-- clamps into the archetype band). Nil = archetype default (e.g. the fixed-level boss).
+local function setTerritory(id: string, centre: Vector3, radius: number, population: number?, levelMin: number?, levelMax: number?)
 	local terr = AR:FindFirstChild("Territories")
 	if not terr then return end
 	for _, m in ipairs(terr:GetChildren()) do
@@ -161,16 +187,17 @@ local function setTerritory(id: string, centre: Vector3, radius: number, populat
 			m.Position = centre
 			m:SetAttribute("Radius", radius)
 			if population then m:SetAttribute("Population", population) end
+			m:SetAttribute("LevelMin", levelMin)
+			m:SetAttribute("LevelMax", levelMax)
 		end
 	end
 end
--- Difficulty gradient east: near-town starter goblins -> mid-meadow goblins -> deep warren boss.
 -- Markers sit at the terrain surface (SURFACE) so enemies seat on top of the ground, not sunk into it.
 local SURFACE = 2
-setTerritory("goblin_camp", Vector3.new(160, SURFACE, 25), 46, 5) -- near-town starter combat
-setTerritory("goblin_ruins", Vector3.new(255, SURFACE, -60), 44, 4) -- mid-meadow escalation
-setTerritory("wolf_den", Vector3.new(0, SURFACE, 255), 52, 4) -- Whispering Woods
-setTerritory("chieftain_arena", Vector3.new(330, SURFACE, 10), 8, 1) -- Goblin Warren boss (deepest)
+setTerritory("wolf_den", Vector3.new(0, SURFACE, 255), 52, 5, 2, 4) -- Whispering Woods (easiest starter)
+setTerritory("goblin_camp", Vector3.new(160, SURFACE, 25), 46, 5, 3, 4) -- near-town starter goblins
+setTerritory("goblin_ruins", Vector3.new(255, SURFACE, -60), 44, 4, 6, 8) -- deeper, bolder goblins
+setTerritory("chieftain_arena", Vector3.new(330, SURFACE, 10), 8, 1, nil, nil) -- Warren boss (fixed Lv10)
 -- Players spawn on the surface, not inside the terrain.
 local spawn = workspace:FindFirstChild("AR_Spawn")
 if spawn and spawn:IsA("BasePart") then spawn.Position = Vector3.new(spawn.Position.X, SURFACE, spawn.Position.Z) end

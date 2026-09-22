@@ -134,12 +134,24 @@ function Service.New(runtime: Runtime)
 		return derive(definition, level)
 	end
 
-	function service.Create(definitionId: string): (State?, string?)
+	-- Optional levelRange biases where in the archetype's band this instance rolls (e.g. a near-town
+	-- territory spawns the low end, a deeper one the high end -- a real difficulty-by-distance gradient).
+	-- It is always clamped INTO the definition's LevelRange, so a territory can never roll out of band.
+	function service.Create(definitionId: string, levelRange: { Minimum: number, Maximum: number }?): (State?, string?)
 		local definition, reason = definitionFor(definitionId)
 		if not definition then
 			return nil, reason
 		end
-		local level = runtime.RollInteger(definition.LevelRange.Minimum, definition.LevelRange.Maximum)
+		local minLevel, maxLevel = definition.LevelRange.Minimum, definition.LevelRange.Maximum
+		if type(levelRange) == "table" and type(levelRange.Minimum) == "number" and type(levelRange.Maximum) == "number"
+			and levelRange.Minimum == levelRange.Minimum and levelRange.Maximum == levelRange.Maximum then
+			minLevel = math.clamp(math.floor(levelRange.Minimum), definition.LevelRange.Minimum, definition.LevelRange.Maximum)
+			maxLevel = math.clamp(math.floor(levelRange.Maximum), definition.LevelRange.Minimum, definition.LevelRange.Maximum)
+			if minLevel > maxLevel then
+				minLevel, maxLevel = maxLevel, minLevel
+			end
+		end
+		local level = runtime.RollInteger(minLevel, maxLevel)
 		if not validLevel(level, definition.LevelRange) then
 			return nil, "InvalidLevelRoll"
 		end
