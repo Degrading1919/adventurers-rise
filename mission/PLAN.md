@@ -12,13 +12,13 @@ Each phase = research → implement → Studio-integrate → playtest → INDEPE
 
 ---
 
-## CURRENT PHASE: Phases 1–3 DONE + evaluator-cleared. Now in Phase 4 (progression breadth + discovery).
+## CURRENT PHASE: Phases 1–3 DONE + evaluator-cleared. In Phase 4 — 4a (Ascension II / Vanguard) DONE + verified; next 4b (discovery/POIs + map/compass).
 Phase 3 close-out: independent evaluator re-graded after the legibility fix cycle — criterion 5 = 4, 8 = 4, 9 = 4 (all ≥4). **VERDICT: advance to Phase 4.** Tracked debt to Phase 5 (non-blocking): armor BODY visual (EquipmentVisuals seam ready), a visceral harder-content signal, done: de-dup 0.9 clamp (EnemyCombat now exports MaxIncomingDamageReduction).
 Phase 3 approach (DONE for iron tier): Head/Body/Legs slots + an armor damage-reduction stat folded into the EXISTING EnemyCombat `IncomingDamageReduction` slot via the Composition defense-modifier provider (so EnemyCombat itself is unchanged — least-regression). Iron set (helm 0.04 / body 0.07 / legs 0.05 = 0.16) craftable from Iron Bars via Smithing (helm Lv4 / legs Lv6 / body Lv7). Gear panel + Forge are data-driven so armor appears/equips automatically (added ITEM_LABELS + SLOT_LABELS). EquipmentVisuals iterates only Weapon/Tool → armor has no character visual yet (clean seam). New Composition test proves 16% reduction through the real pipeline.
 
 ## NEXT ACTION — Phase 4 (progression breadth + discovery)
 Sequence into verify-per-slice sub-slices (implement → test → Studio-verify → evaluator at phase end):
-- **4a — Ascension → Vanguard + next-rank progress (DO FIRST):** add the Vanguard rank on the existing data-driven Ascension system (`Ascension/Definitions` + `AscensionIds`), PreviousRankId=Adept, requirements reusing what's already built: Offense=Melee higher (~15), Defense (~12), OverallSkilling=Mining+Smithing at the steel-tier levels (~8 each), BossMilestone=`BanditWarlordDefeated` (the 2nd boss from Phase 2 — ties the end-game goal to real content). Generalize `ReadModel` to evaluate/surface progress toward the player's NEXT rank (it currently hardcodes Adept) so both ranks display. Client Ascend panel shows the next rank + its 4-category progress. Tests: Ascension.spec (Vanguard chain/reqs), Composition read-model next-rank.
+- **4a — Ascension → Vanguard + next-rank progress. ✅ DONE + Studio-verified** (Vanguard chains from Adept; gated on Melee 15 / Defense 12 / Mining 8 / Smithing 10 / BanditWarlordDefeated; read model + client generalized to the player's next rank).
 - **4b — Discovery/POIs + map or compass:** first-visit zone/POI discovery → reward + log entry (server-authoritative flag + read-model surface); a minimal region map or compass pointing to zones/objectives (addresses the evaluator's recurring "no map/region-goal surface" note; helps criteria 6 & 9).
 - **4c — More Mastery nodes:** deepen per-skill trees so leveling keeps offering choices (criterion 4).
 - Stretch: Woodcutting+Ranged as a 2nd combat/gathering pillar. Independent evaluator at Phase-4 end (grade criteria 4, 6, 9).
