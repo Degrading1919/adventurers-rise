@@ -13,6 +13,7 @@ local SkillIds = require(Shared:WaitForChild("SkillIds"))
 local EquipmentSlots = require(Shared:WaitForChild("EquipmentSlots"))
 local ItemDefinitions = require(Shared:WaitForChild("ItemDefinitions"))
 local RegionDefinitions = require(Shared:WaitForChild("RegionDefinitions"))
+local SoundController = require(script.Parent:WaitForChild("SoundController"))
 
 -- Presentation-only labels (the client owns presentation; stable IDs stay authoritative).
 local SKILL_LABELS: { [string]: string } = {
@@ -1126,6 +1127,7 @@ function Interface.New(player: Player)
 	-- Renders a sanitized boss personal-reward push (see Composition/PlayerEvents) as a temporary toast.
 	-- Pure presentation of server-authoritative data; the client never grants anything from this.
 	function iface.ShowBossReward(payload: any)
+		SoundController.Play("BossReward")
 		if type(payload) ~= "table" then
 			return
 		end
@@ -1250,6 +1252,7 @@ function Interface.New(player: Player)
 			starterPanel.Visible = true
 		end
 		if lastObjectiveStepId ~= nil and lastObjectiveStepId ~= "__complete__" and lastObjectiveStepId ~= ob.StepId then
+			SoundController.Play("Objective")
 			showToast(("Objective complete!\nNext: %s"):format(tostring(ob.Title)), COLORS.Good)
 		end
 		lastObjectiveStepId = ob.StepId
@@ -1347,6 +1350,7 @@ function Interface.New(player: Player)
 						pointsDelta = newM.EarnedPoints - oldM.EarnedPoints
 					end
 					local extra = if pointsDelta == 1 then "   ·   +1 Mastery Point" elseif pointsDelta > 1 then ("   ·   +%d Mastery Points"):format(pointsDelta) else ""
+					SoundController.Play("LevelUp")
 					showToast(("%s reached Level %d!%s"):format(SKILL_LABELS[skillId], newS.Level, extra), COLORS.Good)
 				end
 			end
@@ -1788,6 +1792,7 @@ function Interface.New(player: Player)
 	}, regionBanner)
 	local bannerToken = 0
 	function iface.ShowRegionBanner(displayName: any, blurb: any)
+		SoundController.Play("Banner")
 		bannerToken += 1
 		local myToken = bannerToken
 		regionTitle.Text = tostring(displayName)
@@ -1817,6 +1822,7 @@ function Interface.New(player: Player)
 	-- First-visit discovery reward feedback (server-authoritative outcome), shown as a toast alongside
 	-- the region-entry banner so exploration feels rewarded.
 	function iface.ShowDiscovery(zoneName: any, rewardGold: any)
+		SoundController.Play("Discovery")
 		local name = if type(zoneName) == "string" and zoneName ~= "" then zoneName else "a new area"
 		local gold = if type(rewardGold) == "number" then rewardGold else 0
 		if gold > 0 then

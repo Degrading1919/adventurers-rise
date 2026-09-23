@@ -14,6 +14,7 @@ local RequestIds = require(Shared:WaitForChild("RequestIds"))
 local GatheringNodeIds = require(Shared:WaitForChild("GatheringNodeIds"))
 local EventIds = require(Shared:WaitForChild("EventIds"))
 local RegionDefinitions = require(Shared:WaitForChild("RegionDefinitions"))
+local SoundController = require(script.Parent:WaitForChild("SoundController"))
 
 local INTERACT_RADIUS = 14
 local TARGET_RADIUS = 60
@@ -449,6 +450,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 					if ok then
 						iface.SetStatus(("Hit %s"):format(currentTargetLabel or "target"))
 						playHitFx(hitModel)
+						SoundController.Play("Hit")
 						refresh()
 					elseif reason == "TargetOutOfRange" then
 						iface.SetStatus(("%s is out of range -- move closer"):format(currentTargetLabel or "Target"))
@@ -538,6 +540,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			end
 		end
 		local ok, result, reason = net.Request(RequestIds.CraftingCraft, payload)
+		if ok then
+			SoundController.Play("Craft")
+		end
 		if ok and type(result) == "table" and type(result.Quantity) == "number" then
 			iface.SetStatus(("Crafted x%d."):format(result.Quantity))
 		else
@@ -549,6 +554,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 	-- ===== Equip (any slot) =====
 	iface.Handlers.Equip = function(slotId: string, instanceId: string)
 		local ok, _, reason = net.Request(RequestIds.EquipmentEquip, { SlotId = slotId, InstanceId = instanceId })
+		if ok then
+			SoundController.Play("Equip")
+		end
 		iface.SetStatus(if ok then "Equipped." else ("Equip: " .. reasonText(reason)))
 		refresh()
 	end
@@ -598,6 +606,9 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 			return
 		end
 		local ok, _, reason = net.Request(RequestIds.AscensionAscend, { RankId = rankId })
+		if ok then
+			SoundController.Play("Ascend")
+		end
 		iface.SetStatus(if ok then "Ascended!" else ("Ascend: " .. reasonText(reason)))
 		refresh()
 	end
