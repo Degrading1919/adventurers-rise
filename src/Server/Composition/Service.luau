@@ -199,8 +199,19 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local skills = SkillsService.New(playerData, { Curves = SkillCurves })
 	local inventory = InventoryService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
 	local equipment = EquipmentService.New(playerData)
-	local economy = EconomyService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
-	local mastery = MasteryService.New(playerData, skills, economy)
+	-- Forward-declared so Economy's sale-value bonus can read the player's Smithing "Merchant Smith"
+	-- mastery, even though Mastery is constructed just after Economy (Mastery depends on Economy). The
+	-- closure below is only invoked at sell time, by which point `mastery` is assigned.
+	local mastery: any = nil
+	local economy = EconomyService.New(playerData, {
+		NewInstanceId = runtime.NewInstanceId,
+		SaleValueBonusFromData = function(data: any): number
+			local totals = if mastery then mastery.GetModifiersFromData(data, SkillIds.Smithing) else nil
+			local bonus = if type(totals) == "table" then totals.CraftedSaleValueBonus else nil
+			return if type(bonus) == "number" then bonus else 0
+		end,
+	})
+	mastery = MasteryService.New(playerData, skills, economy)
 	-- Forward-declared here so the defense-modifier provider below can fold in the player's current
 	-- Ascension rank perk; the real service is constructed in dependency order further down.
 	local ascension: any = nil

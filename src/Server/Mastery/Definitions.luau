@@ -205,7 +205,7 @@ local smithingMerchantSmith = branch(
 	"Merchant Smith",
 	"Trade Savvy",
 	"CraftedSaleValueBonus",
-	function(p) return "+" .. p .. " NPC sale value of personally forged goods (reserved for future Economy integration)." end,
+	function(p) return "+" .. p .. " Gold when selling goods to the shop." end,
 	MasteryIds.Nodes.SmithingMerchantSmith
 )
 

@@ -11,6 +11,9 @@ export type PlayerData = {
 }
 export type Runtime = {
 	NewInstanceId: () -> string,
+	-- Optional: the fractional shop SALE-value bonus for this player, read from the same transactional
+	-- data the sell mutates (Smithing "Merchant Smith" mastery). Defaults to none when not injected.
+	SaleValueBonusFromData: ((any) -> number)?,
 }
 export type StackTransaction = {
 	Gold: number,
@@ -82,6 +85,21 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 	validateCatalogs()
 
 	local service = {}
+
+	-- Applies the player's shop sale-value bonus (Smithing Merchant Smith mastery) to a base sale price,
+	-- read from the SAME transactional data the sell is mutating so it is always current. The bonus is a
+	-- non-negative fraction; a missing/invalid provider yields the base price unchanged.
+	local saleValueBonusFromData = runtime.SaleValueBonusFromData
+	local function saleValueFor(data: any, basePrice: number): number
+		if type(saleValueBonusFromData) ~= "function" then
+			return basePrice
+		end
+		local bonus = saleValueBonusFromData(data)
+		if type(bonus) ~= "number" or bonus ~= bonus or bonus <= 0 then
+			return basePrice
+		end
+		return basePrice + math.floor(basePrice * bonus + 0.5)
+	end
 
 	local function catalogFor(catalogId: any): (ShopCatalog.Catalog?, string?)
 		if not validCatalogId(catalogId) then
@@ -309,11 +327,12 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 				mutationReason = "InsufficientItems"
 				return
 			end
-			if gold > Service.MaximumGold - price then
+			local payout = saleValueFor(data, price)
+			if gold > Service.MaximumGold - payout then
 				mutationReason = "GoldOutOfBounds"
 				return
 			end
-			data.Gold = gold + price
+			data.Gold = gold + payout
 			local nextAmount = current - amount
 			if nextAmount == 0 then
 				inventory.Stacks[definitionId] = nil
@@ -428,11 +447,12 @@ function Service.New(playerData: PlayerData, runtime: Runtime)
 					return
 				end
 			end
-			if gold > Service.MaximumGold - price then
+			local payout = saleValueFor(data, price)
+			if gold > Service.MaximumGold - payout then
 				mutationReason = "GoldOutOfBounds"
 				return
 			end
-			data.Gold = gold + price
+			data.Gold = gold + payout
 			inventory.Items[instanceId] = nil
 			result = { Gold = data.Gold, DefinitionId = definition.Id, InstanceId = instanceId }
 		end)

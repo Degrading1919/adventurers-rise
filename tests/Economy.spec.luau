@@ -143,6 +143,41 @@ test("discrete purchases and sales use owned instances", function()
 	equal(f.Records[7].Inventory.Items.shop_sword, nil)
 end)
 
+test("Merchant Smith sale-value bonus raises shop payouts, read from the same transactional data", function()
+	local records = {
+		[7] = {
+			Gold = 1000,
+			SkillXP = {},
+			Inventory = { Stacks = { [Ore] = 2 }, Items = { blade = { DefinitionId = UpgradedSword } } },
+			Equipment = {},
+			ProgressionFlags = {},
+		},
+	}
+	local playerData = {}
+	function playerData.GetSnapshot(userId)
+		return if records[userId] then copy(records[userId]) else nil
+	end
+	function playerData.Update(userId, change)
+		local candidate = copy(records[userId])
+		if not candidate then
+			return false, "NotReady"
+		end
+		change(candidate)
+		records[userId] = candidate
+		return true, nil
+	end
+	local service = Economy.New(playerData, {
+		NewInstanceId = function() return "x" end,
+		SaleValueBonusFromData = function(_data) return 0.25 end,
+	})
+	-- Ore base sell 4 -> 4 + floor(4*0.25 + 0.5) = 5.
+	local oreSale = assert(service.SellStack(7, Shop, Ore, 1))
+	equal(oreSale.Gold, 1005)
+	-- Upgraded sword base sell 50 -> 50 + floor(50*0.25 + 0.5) = 63.
+	local swordSale = assert(service.SellDiscrete(7, Shop, "blade"))
+	equal(swordSale.Gold, 1005 + 63)
+end)
+
 test("equipped discrete items cannot be sold", function()
 	local f = fixture()
 	f.Records[7].Inventory.Items.equipped = { DefinitionId = UpgradedSword }
