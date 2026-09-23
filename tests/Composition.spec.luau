@@ -1737,15 +1737,15 @@ test("first-visit discovery grants a one-time reward from the player's real posi
 	local first = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
 	assert(first.Ok, first.Reason)
 	equal(first.Result.NewlyDiscovered, true)
-	equal(first.Result.RewardGold, 30)
-	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 30)
+	equal(first.Result.RewardGold, 55)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 55)
 
 	-- Re-entry is idempotent: no second reward. (Advance past the per-request throttle each time.)
 	f.Advance(1)
 	local second = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
 	assert(second.Ok, second.Reason)
 	equal(second.Result.NewlyDiscovered, false)
-	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 30)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 55)
 
 	-- The town is home base, not a discovery.
 	f.Advance(1)
@@ -1760,7 +1760,7 @@ test("first-visit discovery grants a one-time reward from the player's real posi
 	local wild = request(f, 7, RequestIds.RegionDiscoverCurrentZone, { ZoneId = "zone_ashen_ruins" })
 	equal(wild.Ok, false)
 	equal(wild.Reason, "NotInAZone")
-	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 30)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 55)
 
 	-- The read model surfaces discovered zones for the map (discovered vs unknown).
 	f.Advance(1)

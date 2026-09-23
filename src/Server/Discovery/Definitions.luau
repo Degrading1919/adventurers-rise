@@ -28,14 +28,17 @@ local function definition(zoneId: string, flagId: string, rewardGold: number): D
 	return table.freeze({ ZoneId = zoneId, FlagId = flagId, RewardGold = rewardGold })
 end
 
--- Rewards rise with distance/danger from the safe town. Provisional, replaceable balance data.
+-- Rewards rise monotonically with a zone's danger (its RegionDefinitions RecommendedLevel: Ironrock 1 <
+-- Whispering Woods 2 < Green Meadows 3 < Ashen Ruins 6 < Goblin Warren 8), so braving a harder, deeper
+-- zone pays more than a safe mining hollow -- and finding the Warlord's lair (Warren) is a real prize.
+-- Provisional, replaceable balance data.
 local ZoneId = RegionIds.Zone
 local definitions: { [string]: Definition } = {
-	[ZoneId.Meadow] = definition(ZoneId.Meadow, ProgressionFlagIds.DiscoveredMeadow, 30),
-	[ZoneId.Forest] = definition(ZoneId.Forest, ProgressionFlagIds.DiscoveredForest, 30),
-	[ZoneId.Hills] = definition(ZoneId.Hills, ProgressionFlagIds.DiscoveredHills, 40),
-	[ZoneId.Ruins] = definition(ZoneId.Ruins, ProgressionFlagIds.DiscoveredRuins, 60),
-	[ZoneId.Warren] = definition(ZoneId.Warren, ProgressionFlagIds.DiscoveredWarren, 80),
+	[ZoneId.Hills] = definition(ZoneId.Hills, ProgressionFlagIds.DiscoveredHills, 25),
+	[ZoneId.Forest] = definition(ZoneId.Forest, ProgressionFlagIds.DiscoveredForest, 40),
+	[ZoneId.Meadow] = definition(ZoneId.Meadow, ProgressionFlagIds.DiscoveredMeadow, 55),
+	[ZoneId.Ruins] = definition(ZoneId.Ruins, ProgressionFlagIds.DiscoveredRuins, 90),
+	[ZoneId.Warren] = definition(ZoneId.Warren, ProgressionFlagIds.DiscoveredWarren, 150),
 }
 
 function DiscoveryDefinitions.Validate(candidateDefinitions: any): (boolean, string?)

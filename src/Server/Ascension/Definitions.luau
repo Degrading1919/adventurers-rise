@@ -163,6 +163,40 @@ function AscensionDefinitions.Validate(candidateDefinitions: any): (boolean, str
 			end
 		end
 	end
+
+	-- The rank graph MUST be a single linear chain: exactly one starting rank (no PreviousRankId) and at
+	-- most one successor per rank, with every rank reaching the start by following PreviousRankId (no
+	-- branches, no cycles). This guarantees "the player's next rank" is always well-defined -- the service
+	-- picks the unique successor of the current rank, so a branch would make that nondeterministic.
+	local rootCount = 0
+	local successorsByPrevious: { [string]: number } = {}
+	local total = 0
+	for _, candidate in candidateDefinitions do
+		total += 1
+		if candidate.PreviousRankId == nil then
+			rootCount += 1
+		else
+			local count = (successorsByPrevious[candidate.PreviousRankId] or 0) + 1
+			successorsByPrevious[candidate.PreviousRankId] = count
+			if count > 1 then
+				return false, "Ascension ranks must form a single chain: multiple successors for " .. candidate.PreviousRankId
+			end
+		end
+	end
+	if rootCount ~= 1 then
+		return false, "Ascension ranks require exactly one starting rank"
+	end
+	for rankId, candidate in candidateDefinitions do
+		local steps = 0
+		local cursor = candidate
+		while cursor.PreviousRankId ~= nil do
+			cursor = candidateDefinitions[cursor.PreviousRankId]
+			steps += 1
+			if steps > total then
+				return false, "Ascension rank chain must be acyclic: " .. rankId
+			end
+		end
+	end
 	return true, nil
 end
 

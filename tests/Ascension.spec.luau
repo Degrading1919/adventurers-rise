@@ -358,4 +358,23 @@ test("a fully-qualified Adept ascends to Vanguard through the same generic chain
 	equal(f.Records[7].Ascension.RankId, AscensionIds.Vanguard)
 end)
 
+test("Validate rejects a branching rank graph so 'next rank' stays well-defined", function()
+	local branching = {}
+	for id, def in AscensionDefinitions.ById do
+		branching[id] = def
+	end
+	-- Rebuild Vanguard as a plain copy that (wrongly) also chains from Adventurer, giving Adventurer two
+	-- successors (Adept AND Vanguard) -- exactly the branch the chain check must reject.
+	local vanguard = AscensionDefinitions.ById[AscensionIds.Vanguard]
+	local clone = {}
+	for key, value in vanguard do
+		clone[key] = value
+	end
+	clone.PreviousRankId = AscensionIds.Adventurer
+	branching[AscensionIds.Vanguard] = clone
+	local ok, reason = AscensionDefinitions.Validate(branching)
+	equal(ok, false)
+	assert(type(reason) == "string" and reason:find("single chain") ~= nil, "expected a single-chain rejection, got " .. tostring(reason))
+end)
+
 print(("%d Ascension checks passed"):format(passed))
