@@ -75,6 +75,19 @@ local TERRITORY_LEASH_BUFFER = 40
 local ACTIVATION_RADIUS = 220
 -- Gentle vertical bob applied while an enemy is moving, to read as locomotion without an animated rig.
 local WALK_BOB_AMPLITUDE = 0.35
+
+-- Terrain-following for kinematic enemies. As an awake enemy walks, its ground height is re-sampled from
+-- the world surface directly beneath its NEXT position, so roaming/chasing populations follow the relief
+-- of Region I (rolling hills, the raised town plateau, the descent into the mine hollow) instead of
+-- hovering at a fixed spawn height. A ray is cast straight down from a little above the enemy's last
+-- known ground: a solid hit within a sane step band adopts that height; a miss (a ledge/overhang), a
+-- water hit, or a step sharper than the band is REJECTED and the enemy holds its current height. Combined
+-- with leashing, that rejection naturally steers roaming away from cliffs and the river without any
+-- pathfinding graph. On flat ground this samples the same height every frame, so it is a no-op there.
+local GROUND_PROBE_UP = 24 -- begin the ray this many studs above the last known ground height
+local GROUND_PROBE_DOWN = 160 -- and cast down this far to find the surface beneath
+local MAX_STEP_DROP = 12 -- reject a surface more than this far BELOW current (a cliff/edge)
+local MAX_STEP_RISE = 16 -- reject a surface more than this far ABOVE current (a wall/steep face)
 -- Degrees to rotate a facing enemy so the model's visible front points where it heads. The provisional
 -- meshes' authored front is not -Z, so this corrects it; verified against the live models in Studio.
 local FACING_YAW_OFFSET = 0
@@ -482,6 +495,29 @@ function Service.New(runtime: Runtime)
 		return maxY - minY
 	end
 
+	-- One ray configuration, reused every sample: hit ONLY the world Terrain (never enemies, characters,
+	-- props, or markers), and do not ignore water, so a water surface registers as a hit we can reject.
+	local groundRayParams = RaycastParams.new()
+	groundRayParams.FilterType = Enum.RaycastFilterType.Include
+	groundRayParams.FilterDescendantsInstances = { runtime.Workspace.Terrain }
+	groundRayParams.IgnoreWater = false
+
+	-- Ground height of the walkable surface beneath (x, z), or fallbackY when there is no acceptable
+	-- surface there (see the terrain-following note near the movement constants). A pure read of static
+	-- terrain that never mutates state, so both spawning/respawning and the move pass can share it.
+	local function sampleGroundY(x: number, z: number, fallbackY: number): number
+		local origin = Vector3.new(x, fallbackY + GROUND_PROBE_UP, z)
+		local hit = runtime.Workspace:Raycast(origin, Vector3.new(0, -GROUND_PROBE_DOWN, 0), groundRayParams)
+		if hit == nil or hit.Material == Enum.Material.Water then
+			return fallbackY
+		end
+		local y = hit.Position.Y
+		if y < fallbackY - MAX_STEP_DROP or y > fallbackY + MAX_STEP_RISE then
+			return fallbackY
+		end
+		return y
+	end
+
 	local function attachLabel(host: BasePart, offsetY: number, definitionId: string, level: any)
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "Label"
@@ -578,6 +614,9 @@ function Service.New(runtime: Runtime)
 	-- the far-off spot where it died mid-chase) and populations don't all stack on one exact marker.
 	local function seatInTerritory(record: EnemyRecord)
 		local ox, oz = randomOffsetInRadius(record.Radius)
+		-- Re-ground at the fresh roam point so a respawn seats on the terrain there, not at the (possibly
+		-- elevated) height where the previous life happened to die.
+		record.GroundY = sampleGroundY(record.Home.X + ox, record.Home.Z + oz, record.GroundY)
 		record.BasePosition = Vector3.new(record.Home.X + ox, record.GroundY, record.Home.Z + oz)
 		record.AIMemory = freshMemory()
 		record.BobPhase = 0
@@ -779,7 +818,12 @@ function Service.New(runtime: Runtime)
 						local dist = math.sqrt(dx * dx + dz * dz)
 						if dist > 1e-3 then
 							local step = math.min(intent.Speed * dt, dist)
-							newBase = Vector3.new(base.X + dx / dist * step, record.GroundY, base.Z + dz / dist * step)
+							local nx = base.X + dx / dist * step
+							local nz = base.Z + dz / dist * step
+							-- Follow the terrain: adopt the surface height beneath the next XZ (or hold the current
+							-- height at a rejected step), so the body walks up and down Region I's relief.
+							record.GroundY = sampleGroundY(nx, nz, record.GroundY)
+							newBase = Vector3.new(nx, record.GroundY, nz)
 							moving = step > 1e-3
 						end
 					end
