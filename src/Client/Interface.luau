@@ -1671,8 +1671,12 @@ function Interface.New(player: Player)
 			-- Stagger labels vertically by index so neighbouring zones (e.g. the eastern Meadow + Warren,
 			-- which sit close together) don't overprint each other.
 			local labelYOffset = 10 + (i % 2) * 16
+			-- Anchor labels toward the interior near the panel edges so long names don't clip.
+			local ax = if u > 0.72 then 1 elseif u < 0.28 then 0 else 0.5
+			local ox = if ax == 1 then -6 elseif ax == 0 then 6 else 0
 			make("TextLabel", {
-				Size = UDim2.new(0, 118, 0, 14), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(u, 0, v, labelYOffset),
+				Size = UDim2.new(0, 118, 0, 14), AnchorPoint = Vector2.new(ax, 0), Position = UDim2.new(u, ox, v, labelYOffset),
+				TextXAlignment = if ax == 1 then Enum.TextXAlignment.Right elseif ax == 0 then Enum.TextXAlignment.Left else Enum.TextXAlignment.Center,
 				BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
 				TextColor3 = if isObjective then COLORS.Good elseif known then COLORS.Text else COLORS.Dim,
 				Text = if isObjective then ("▶ " .. zone.DisplayName) elseif known then zone.DisplayName else "???",
@@ -1693,8 +1697,11 @@ function Interface.New(player: Player)
 						BackgroundColor3 = Color3.fromRGB(214, 74, 74), BorderSizePixel = 0, Rotation = 45, ZIndex = 5,
 					}, mapArea)
 					make("UIStroke", { Color = COLORS.Text, Thickness = 1 }, diamond)
+					local bax = if u > 0.72 then 1 elseif u < 0.28 then 0 else 0.5
+					local box = if bax == 1 then -6 elseif bax == 0 then 6 else 0
 					make("TextLabel", {
-						Size = UDim2.new(0, 118, 0, 12), AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(u, 0, v, -10),
+						Size = UDim2.new(0, 118, 0, 12), AnchorPoint = Vector2.new(bax, 1), Position = UDim2.new(u, box, v, -10),
+						TextXAlignment = if bax == 1 then Enum.TextXAlignment.Right elseif bax == 0 then Enum.TextXAlignment.Left else Enum.TextXAlignment.Center,
 						BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10,
 						TextColor3 = Color3.fromRGB(235, 150, 150), Text = label, ZIndex = 5,
 					}, mapArea)

@@ -39,6 +39,26 @@ local LIMB_FALLBACKS: { [string]: string } = {
 }
 
 local ATTACHMENT_PREFIX = "AR_EquipVisual_"
+local ARMOR_PREFIX = "AR_ArmorVisual_"
+
+-- Armour is shown as a simple tinted shell welded over a body part (placeholder until rigged meshes
+-- land; the seam is identical to the weapon/tool templates). R15 primary, R6 fallback.
+local ARMOR_LIMBS: { [string]: string } = {
+	[EquipmentSlots.Head] = "Head",
+	[EquipmentSlots.Body] = "UpperTorso",
+	[EquipmentSlots.Legs] = "LowerTorso",
+}
+local ARMOR_LIMB_FALLBACKS: { [string]: string } = {
+	UpperTorso = "Torso",
+	LowerTorso = "Torso",
+}
+-- Tint by material tier so iron vs steel reads at a glance; keyed by the item id's tier prefix.
+local function armorColor(definitionId: string): Color3
+	if string.find(definitionId, "steel", 1, true) then
+		return Color3.fromRGB(120, 140, 170) -- steel: cool blue-grey
+	end
+	return Color3.fromRGB(175, 176, 182) -- iron: plain grey
+end
 
 local EquipmentVisuals = {}
 
@@ -107,6 +127,54 @@ function EquipmentVisuals.New(player: Player)
 		shown[slotId] = definitionId
 	end
 
+	local function armorLimbFor(character: Model, limbName: string): BasePart?
+		local part = character:FindFirstChild(limbName)
+		if not part then
+			local fallback = ARMOR_LIMB_FALLBACKS[limbName]
+			part = fallback and character:FindFirstChild(fallback)
+		end
+		if part and part:IsA("BasePart") then
+			return part
+		end
+		return nil
+	end
+
+	local function removeArmorVisual(character: Model, slotId: string)
+		local existing = character:FindFirstChild(ARMOR_PREFIX .. slotId)
+		if existing then
+			existing:Destroy()
+		end
+		shown[slotId] = nil
+	end
+
+	-- Placeholder armour: a tinted shell part welded over the body part, slightly larger so it reads as
+	-- worn plate. Same clean replacement seam as the weapon/tool templates (swap for rigged meshes later).
+	local function attachArmorVisual(character: Model, slotId: string, definitionId: string)
+		local limbName = ARMOR_LIMBS[slotId]
+		local limb = if limbName then armorLimbFor(character, limbName) else nil
+		if not limb then
+			return
+		end
+		local shell = Instance.new("Part")
+		shell.Name = ARMOR_PREFIX .. slotId
+		shell.Size = limb.Size * 1.12
+		shell.Color = armorColor(definitionId)
+		shell.Material = Enum.Material.Metal
+		shell.Transparency = 0.25
+		shell.Anchored = false
+		shell.CanCollide = false
+		shell.CanQuery = false
+		shell.CanTouch = false
+		shell.Massless = true
+		shell.CFrame = limb.CFrame
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = limb
+		weld.Part1 = shell
+		weld.Parent = shell
+		shell.Parent = character
+		shown[slotId] = definitionId
+	end
+
 	-- Reconcile the shown visuals to an Equipment snapshot: { [slotId] = { DefinitionId = ... } }.
 	-- Idempotent -- safe to call every state refresh; only changed slots rebuild.
 	function self.Apply(equipment: any)
@@ -137,6 +205,25 @@ function EquipmentVisuals.New(player: Player)
 				removeVisual(character, slotId)
 				if desired ~= nil then
 					attachVisual(character, slotId, desired)
+				end
+			end
+		end
+
+		-- Armour slots: the same reconciliation, but as tinted body shells rather than held templates.
+		for slotId in ARMOR_LIMBS do
+			local desired: string? = nil
+			if type(equipment) == "table" then
+				local slot = equipment[slotId]
+				if type(slot) == "table" and type(slot.DefinitionId) == "string" then
+					desired = slot.DefinitionId
+				end
+			end
+			local current = shown[slotId]
+			local present = character:FindFirstChild(ARMOR_PREFIX .. slotId) ~= nil
+			if desired ~= current or (desired ~= nil and not present) then
+				removeArmorVisual(character, slotId)
+				if desired ~= nil then
+					attachArmorVisual(character, slotId, desired)
 				end
 			end
 		end
