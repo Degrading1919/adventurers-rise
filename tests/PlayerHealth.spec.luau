@@ -153,28 +153,35 @@ end)
 
 -- ===== Defense Mastery: Resilience regeneration =====
 
-test("Resilience RecoveryBonus regenerates a below-max living player; no bonus, full, and dead never heal", function()
+test("Resilience RecoveryBonus regenerates a below-max living player OUT OF COMBAT; suppressed in combat; no bonus/full/dead never heal", function()
 	local recovery = 0.1
-	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { RecoveryBonus = recovery } end)
-	-- Damage to 60, then 1s of regen: heal = 100 * 0.1 * 0.5 * 1 = 5 -> 65.
+	local now = 0
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { RecoveryBonus = recovery } end, function() return now end)
+	-- Damage to 60 stamps last-damage at t=0. Regenerating while still "in combat" (< 5s since the hit)
+	-- heals nothing -- this is out-of-combat recovery, not in-combat sustain.
 	assert(s.ApplyDamage(7, 40))
 	s.Regenerate(7, 1)
+	equal(assert(s.GetState(7)).Health, 60)
+	-- After the out-of-combat window, 1s of regen heals 100 * 0.1 * 0.5 * 1 = 5 -> 65.
+	now = 10
+	s.Regenerate(7, 1)
 	equal(assert(s.GetState(7)).Health, 65)
-	-- Regen never overshoots the maximum.
+	-- Regen never overshoots the maximum; a full player is a no-op; invalid dt is ignored.
 	s.Regenerate(7, 9999)
 	equal(assert(s.GetState(7)).Health, 100)
-	-- A full player needs no regen (no-op), and invalid dt is ignored.
 	s.Regenerate(7, 5)
 	s.Regenerate(7, 0)
 	equal(assert(s.GetState(7)).Health, 100)
 	-- No RecoveryBonus means no regeneration at all (baseline players are unchanged).
 	recovery = 0
 	assert(s.ApplyDamage(7, 30))
+	now = 20
 	s.Regenerate(7, 10)
 	equal(assert(s.GetState(7)).Health, 70)
-	-- A dead player does not self-heal.
+	-- A dead player does not self-heal, even well out of combat.
 	recovery = 0.1
 	assert(s.ApplyDamage(7, 9999))
+	now = 40
 	s.Regenerate(7, 10)
 	equal(s.IsAlive(7), false)
 end)

@@ -7,7 +7,7 @@
 -- the banner/ambient, the scene-builder places biomes/populations to match it, and the pure ZoneAt()
 -- resolver classifies a world position into a zone (unit-testable, no Roblox instances).
 --
--- Geography note: all zones live on the flat walkable surface (y=0). Region I is "The Marchlands" --
+-- Geography note: all zones live on the flat walkable surface (y=0). Region I is "The Borderlands" --
 -- a grounded medieval frontier radiating from the safe town, with difficulty rising outward.
 
 local RegionIds = require(script.Parent.RegionIds)
@@ -43,21 +43,21 @@ local function zone(id: string, regionId: string, name: string, cx: number, cz: 
 end
 
 local regions: { [string]: Region } = {
-	[RegionId.Marchlands] = table.freeze({
-		Id = RegionId.Marchlands,
-		DisplayName = "The Marchlands",
+	[RegionId.Borderlands] = table.freeze({
+		Id = RegionId.Borderlands,
+		DisplayName = "The Borderlands",
 		Subtitle = "A grounded frontier of farms, woods, and old ruins.",
 	}),
 }
 
--- Ordered so ZoneAt's nearest-center tiebreak is deterministic; all belong to The Marchlands.
+-- Ordered so ZoneAt's nearest-center tiebreak is deterministic; all belong to The Borderlands.
 local zones: { Zone } = {
-	zone(ZoneId.Town, RegionId.Marchlands, "Havenbrook", 0, 0, 150, 1, true, "town", 1, "A safe frontier town: train, forge, and trade."),
-	zone(ZoneId.Forest, RegionId.Marchlands, "Whispering Woods", 0, 260, 210, 2, false, "forest", 2, "Wolves prowl the quiet northern woods."),
-	zone(ZoneId.Meadow, RegionId.Marchlands, "Green Meadows", 260, 0, 210, 2, false, "meadow", 3, "Goblins raid the eastern farmland — bolder the deeper you go."),
-	zone(ZoneId.Hills, RegionId.Marchlands, "Ironrock Hollow", 0, -270, 210, 2, false, "hills", 1, "Rich iron veins run through the southern rock."),
-	zone(ZoneId.Ruins, RegionId.Marchlands, "Ashen Ruins", -270, 0, 210, 3, false, "ruins", 6, "Crumbling ruins on the old frontier — something waits here."),
-	zone(ZoneId.Warren, RegionId.Marchlands, "Goblin Warren", 330, 0, 95, 4, false, "warren", 8, "The Goblin Chieftain's deep lair."),
+	zone(ZoneId.Town, RegionId.Borderlands, "Havenbrook", 0, 0, 150, 1, true, "town", 1, "A safe frontier town: train, forge, and trade."),
+	zone(ZoneId.Forest, RegionId.Borderlands, "Whispering Woods", 0, 260, 210, 2, false, "forest", 2, "Wolves prowl the quiet northern woods."),
+	zone(ZoneId.Meadow, RegionId.Borderlands, "Green Meadows", 260, 0, 210, 2, false, "meadow", 3, "Goblins raid the eastern farmland — bolder the deeper you go."),
+	zone(ZoneId.Hills, RegionId.Borderlands, "Ironrock Hollow", 0, -270, 210, 2, false, "hills", 1, "Rich iron veins run through the southern rock."),
+	zone(ZoneId.Ruins, RegionId.Borderlands, "Ashen Ruins", -270, 0, 210, 3, false, "ruins", 6, "Crumbling ruins on the old frontier — something waits here."),
+	zone(ZoneId.Warren, RegionId.Borderlands, "Goblin Warren", 330, 0, 95, 4, false, "warren", 8, "The Goblin Chieftain's deep lair."),
 }
 local zoneById: { [string]: Zone } = {}
 for _, z in zones do

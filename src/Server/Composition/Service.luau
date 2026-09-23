@@ -15,6 +15,7 @@ local EnemiesService = require(script.Parent.Parent.Enemies.Service)
 local CombatService = require(script.Parent.Parent.Combat.Service)
 local GatheringService = require(script.Parent.Parent.Gathering.Service)
 local CraftingService = require(script.Parent.Parent.Crafting.Service)
+local CraftingDefinitions = require(script.Parent.Parent.Crafting.Definitions)
 local BossesService = require(script.Parent.Parent.Bosses.Service)
 local AscensionService = require(script.Parent.Parent.Ascension.Service)
 local MasteryService = require(script.Parent.Parent.Mastery.Service)
@@ -205,9 +206,20 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- mastery, even though Mastery is constructed just after Economy (Mastery depends on Economy). The
 	-- closure below is only invoked at sell time, by which point `mastery` is assigned.
 	local mastery: any = nil
+	-- "Personally forged goods" (docs/MASTERY_TREES.md, Merchant Smith) == the outputs of Smithing
+	-- recipes: bars + forged equipment. Raw mined resources (ore, coal, gems) are NOT forged, so the
+	-- sale bonus never applies to them -- it stays an economic specialisation of Smithing, not a generic
+	-- resource-sale buff.
+	local forgedGoodIds: { [string]: boolean } = {}
+	for _, recipe in CraftingDefinitions.ById do
+		forgedGoodIds[recipe.OutputItemId] = true
+	end
 	local economy = EconomyService.New(playerData, {
 		NewInstanceId = runtime.NewInstanceId,
-		SaleValueBonusFromData = function(data: any): number
+		SaleValueBonusFromData = function(data: any, definitionId: string): number
+			if not forgedGoodIds[definitionId] then
+				return 0
+			end
 			local totals = if mastery then mastery.GetModifiersFromData(data, SkillIds.Smithing) else nil
 			local bonus = if type(totals) == "table" then totals.CraftedSaleValueBonus else nil
 			return if type(bonus) == "number" then bonus else 0
@@ -316,7 +328,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- Defense Mastery raises this player's maximum health (MaxHealthBonus) and reduces incoming enemy
 	-- damage (IncomingDamageReduction); both are read live from the injected provider so a selection or
 	-- respec takes effect immediately.
-	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH }, defenseModifiers)
+	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH }, defenseModifiers, runtime.Clock)
 	local enemyCombat = EnemyCombat.New(playerHealth, skills, {
 		DefenseXP = { Base = DEFENSE_XP_BASE, PerLevel = DEFENSE_XP_PER_LEVEL, Minimum = DEFENSE_XP_MINIMUM, Maximum = DEFENSE_XP_MAXIMUM },
 		ProgressionSkillId = SkillIds.Melee,

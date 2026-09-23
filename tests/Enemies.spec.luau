@@ -254,6 +254,43 @@ test("the target adapter applies Combat damage and exposes each death once", fun
 	equal(records[7].SkillXP[SkillIds.Melee], 3)
 end)
 
+test("CreateCleaveResolver returns only alive non-boss neighbours and queues a cleaved kill's Gold for the reward path", function()
+	-- Primary (attacked directly, its own reward flows elsewhere), a normal neighbour (a valid cleave
+	-- target), and a boss neighbour (Cleave must never splash the single-target boss path).
+	local enemies = enemyFixture({ "cleave-primary", "cleave-normal", "cleave-boss" }, { 3, 3, 10 })
+	local primary = assert(enemies.Create(EnemyIds.Goblin))
+	local normal = assert(enemies.Create(EnemyIds.Goblin))
+	local boss = assert(enemies.Create(EnemyIds.GoblinChieftain))
+
+	local resolve = enemies.CreateCleaveResolver(function(forPrimary)
+		equal(forPrimary, primary.RuntimeId)
+		-- The provider hands back everything nearby, including the primary itself and the boss; the
+		-- resolver is responsible for filtering them out.
+		return { primary.RuntimeId, normal.RuntimeId, boss.RuntimeId }, nil
+	end)
+
+	local targets = assert(resolve(primary.RuntimeId))
+	-- Only the normal neighbour survives filtering: the primary (self) and the boss are excluded.
+	equal(#targets, 1)
+	equal(targets[1].RuntimeId, normal.RuntimeId)
+	assert(type(targets[1].ApplyDamage) == "function")
+
+	-- A cleave hit that kills the neighbour must queue a consumable death so the reward coordinator can
+	-- pay its Gold exactly once (group farming) -- the same authoritative death record as a primary kill.
+	local applied = assert(targets[1].ApplyDamage(99999))
+	assert(applied > 0)
+	equal(assert(enemies.GetSnapshot(normal.RuntimeId)).Alive, false)
+	local death = assert(enemies.ConsumeDeath(normal.RuntimeId))
+	equal(death.RuntimeId, normal.RuntimeId)
+	equal(death.DefinitionId, EnemyIds.Goblin)
+	equal(death.GoldReward, normal.GoldReward)
+	-- The boss neighbour was never touched by the cleave and has no queued death to consume.
+	equal(assert(enemies.GetSnapshot(boss.RuntimeId)).Alive, true)
+	local noBossDeath, noBossReason = enemies.ConsumeDeath(boss.RuntimeId)
+	equal(noBossDeath, nil)
+	equal(noBossReason, "DeathNotAvailable")
+end)
+
 test("Goblin Chieftain is a stable boss definition with metadata distinguishing it from Goblin", function()
 	local valid = Definitions.Validate(Definitions.ById)
 	equal(valid, true)

@@ -166,16 +166,23 @@ test("Merchant Smith sale-value bonus raises shop payouts, read from the same tr
 		records[userId] = candidate
 		return true, nil
 	end
+	-- The Merchant Smith bonus is scoped (in Composition) to goods the player forged, so the provider is
+	-- item-aware: it receives the definition id of the exact good being sold. Here it grants +25% only to
+	-- the forged sword and nothing to raw Ore, proving both that Economy routes the correct definition id
+	-- through each sell path (SellStack -> the stack id; SellDiscrete -> the item's definition id) and that
+	-- an unforged good keeps its base payout.
 	local service = Economy.New(playerData, {
 		NewInstanceId = function() return "x" end,
-		SaleValueBonusFromData = function(_data) return 0.25 end,
+		SaleValueBonusFromData = function(_data, definitionId)
+			return if definitionId == UpgradedSword then 0.25 else 0
+		end,
 	})
-	-- Ore base sell 4 -> 4 + floor(4*0.25 + 0.5) = 5.
+	-- Raw Ore is not a forged good: base sell 4, no bonus -> 1004.
 	local oreSale = assert(service.SellStack(7, Shop, Ore, 1))
-	equal(oreSale.Gold, 1005)
-	-- Upgraded sword base sell 50 -> 50 + floor(50*0.25 + 0.5) = 63.
+	equal(oreSale.Gold, 1004)
+	-- The forged Upgraded Sword qualifies: base 50 -> 50 + floor(50*0.25 + 0.5) = 63.
 	local swordSale = assert(service.SellDiscrete(7, Shop, "blade"))
-	equal(swordSale.Gold, 1005 + 63)
+	equal(swordSale.Gold, 1004 + 63)
 end)
 
 test("equipped discrete items cannot be sold", function()

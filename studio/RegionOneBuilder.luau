@@ -1,6 +1,6 @@
 --!strict
 
--- REGION I SCENE BUILDER — "The Marchlands" (Studio-owned world, reproducibly generated).
+-- REGION I SCENE BUILDER — "The Borderlands" (Studio-owned world, reproducibly generated).
 --
 -- HOW TO RUN: paste this script's body into the Roblox_Studio MCP `execute_luau` in EDIT mode (place id
 -- 136843447225408). It rebuilds the whole Region I world: terrain biomes on a flat walkable surface,
@@ -263,4 +263,4 @@ Lighting.Ambient = Color3.fromRGB(90, 90, 95)
 local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
 if atmos then atmos.Density = 0.08; atmos.Haze = 0.4; atmos.Glare = 0; atmos.Color = Color3.fromRGB(220, 224, 230); atmos.Decay = Color3.fromRGB(150, 160, 175) end
 
-return ("Region I 'The Marchlands' built: terrain biomes + %d scenery parts; town, mine, ruins, warren landmarks; territories & iron relocated to zones; %d coal nodes seeded deep in Ironrock Hollow. SAVE THE PLACE to persist."):format(#scenery:GetChildren(), #coalFolder:GetChildren())
+return ("Region I 'The Borderlands' built: terrain biomes + %d scenery parts; town, mine, ruins, warren landmarks; territories & iron relocated to zones; %d coal nodes seeded deep in Ironrock Hollow. SAVE THE PLACE to persist."):format(#scenery:GetChildren(), #coalFolder:GetChildren())

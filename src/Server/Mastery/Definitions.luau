@@ -51,7 +51,7 @@ local ALLOWED_EFFECT_TYPES: { [string]: boolean } = {
 	GatheringSpeedBonus = true,
 	PrimaryYieldBonus = true,
 	RareResourceBonus = true,
-	ProcessingSpeedBonus = true,
+	ProcessingEfficiencyBonus = true,
 	MaterialEfficiencyBonus = true,
 	CraftedSaleValueBonus = true,
 }
@@ -186,8 +186,8 @@ local smithingSmelter = branch(
 	MasteryIds.Branches.SmithingSmelter,
 	"Smelter",
 	"Efficient Smelting",
-	"ProcessingSpeedBonus",
-	function(p) return "+" .. p .. " ore-to-bar processing speed." end,
+	"ProcessingEfficiencyBonus",
+	function(p) return "-" .. p .. " ore used when smelting ore into bars." end,
 	MasteryIds.Nodes.SmithingSmelter
 )
 local smithingForgemaster = branch(
@@ -205,7 +205,7 @@ local smithingMerchantSmith = branch(
 	"Merchant Smith",
 	"Trade Savvy",
 	"CraftedSaleValueBonus",
-	function(p) return "+" .. p .. " Gold when selling goods to the shop." end,
+	function(p) return "+" .. p .. " shop sale value of goods you forge (bars & equipment)." end,
 	MasteryIds.Nodes.SmithingMerchantSmith
 )
 

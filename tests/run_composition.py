@@ -113,7 +113,7 @@ local scripts = {{
                 Enemies = {{ Service = "EnemiesService" }},
                 Combat = {{ Service = "CombatService" }},
                 Gathering = {{ Service = "GatheringService" }},
-                Crafting = {{ Service = "CraftingService" }},
+                Crafting = {{ Service = "CraftingService", Definitions = "CraftingDefinitions" }},
                 Bosses = {{ Service = "BossesService" }},
                 Ascension = {{ Service = "AscensionService" }},
                 Mastery = {{ Service = "MasteryService" }},
@@ -214,6 +214,7 @@ local function runTests(require)
                 source = source.replace('require(script.Parent.Parent.Combat.Service)', 'require("./CombatService")')
                 source = source.replace('require(script.Parent.Parent.Gathering.Service)', 'require("./GatheringService")')
                 source = source.replace('require(script.Parent.Parent.Crafting.Service)', 'require("./CraftingService")')
+                source = source.replace('require(script.Parent.Parent.Crafting.Definitions)', 'require("./CraftingDefinitions")')
                 source = source.replace('require(script.Parent.Parent.Bosses.Service)', 'require("./BossesService")')
                 source = source.replace('require(script.Parent.Parent.Ascension.Service)', 'require("./AscensionService")')
                 source = source.replace('require(script.Parent.Parent.Mastery.Service)', 'require("./MasteryService")')

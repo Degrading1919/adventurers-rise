@@ -1,11 +1,13 @@
 --!strict
 
--- Persist these IDs. Region I of Adventurer's Rise ("The Marchlands") and its neighborhood zones.
--- Add regions/zones without changing existing values. Display names live in RegionDefinitions; these
--- are the stable identifiers used by data, saves, and the runtime zone-detection.
+-- Persist these IDs. Region I of Adventurer's Rise ("The Borderlands", per docs/DESIGN_SOURCE_OF_TRUTH
+-- and V1_SCOPE) and its neighborhood zones. Add regions/zones without changing existing values. Display
+-- names live in RegionDefinitions; these are the stable identifiers used by data and runtime zone-detection.
+-- (The region id was reconciled from an unauthorized "region_marchlands" drift back to canon; the region
+-- id is not a persisted save key, and the persisted zone/discovery ids are unchanged. See mission/DECISIONS.)
 
 local Region = {
-	Marchlands = "region_marchlands",
+	Borderlands = "region_borderlands",
 }
 
 local Zone = {

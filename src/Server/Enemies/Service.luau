@@ -307,13 +307,15 @@ function Service.New(runtime: Runtime)
 		end
 	end
 
-	-- Builds the Melee "Cleave" resolver: given a primary target, returns lightweight secondary targets
-	-- (each an ApplyDamage closure over this Enemies service) for every OTHER enemy the injected world
-	-- provider reports as physically near it. Cleave damage bypasses the reward/death-queue path on
-	-- purpose -- it is crowd control, not a Gold source -- so a cleaved kill simply dies and respawns.
+	-- Builds the Melee "Cleave" resolver: given a primary target, returns secondary targets (each an
+	-- ApplyDamage closure + its RuntimeId) for every OTHER *non-boss* enemy the injected world provider
+	-- reports as physically near it. Per docs/MASTERY_TREES, Cleave is for multiple nearby enemies and
+	-- GROUP FARMING, but must not be a boss path -- so BOSSES ARE EXCLUDED here. A cleaved kill queues its
+	-- death like a primary hit, so CombatRewards can consume it exactly once and pay its Gold (rewarding
+	-- group farming), and World's normal death poll still reaps/respawns it.
 	function service.CreateCleaveResolver(nearbyProvider: (string) -> ({ string }?, string?))
 		assert(type(nearbyProvider) == "function", "Enemies requires a trusted cleave-targets provider")
-		return function(primaryRuntimeId: string): ({ { ApplyDamage: (number) -> (number?, string?) } }?, string?)
+		return function(primaryRuntimeId: string): ({ { RuntimeId: string, ApplyDamage: (number) -> (number?, string?) } }?, string?)
 			if not validStableId(primaryRuntimeId) then
 				return nil, "InvalidRuntimeId"
 			end
@@ -321,19 +323,29 @@ function Service.New(runtime: Runtime)
 			if type(ids) ~= "table" then
 				return nil, reason or "NoCleaveTargets"
 			end
-			local targets: { { ApplyDamage: (number) -> (number?, string?) } } = {}
+			local targets: { { RuntimeId: string, ApplyDamage: (number) -> (number?, string?) } } = {}
 			for _, runtimeId in ids do
 				if validStableId(runtimeId) and runtimeId ~= primaryRuntimeId then
-					local id = runtimeId
-					table.insert(targets, {
-						ApplyDamage = function(amount: number): (number?, string?)
-							local result, damageReason = service.ApplyDamage(id, amount)
-							if not result then
-								return nil, damageReason
-							end
-							return result.AppliedDamage, nil
-						end,
-					})
+					local snapshot = enemies[runtimeId]
+					local definition = if snapshot then Definitions.ById[snapshot.DefinitionId] else nil
+					-- Only alive, non-boss enemies are valid cleave targets.
+					if snapshot and snapshot.Alive and definition and not definition.Boss then
+						local id = runtimeId
+						table.insert(targets, {
+							RuntimeId = id,
+							ApplyDamage = function(amount: number): (number?, string?)
+								local result, damageReason = service.ApplyDamage(id, amount)
+								if not result then
+									return nil, damageReason
+								end
+								-- Queue the death so the reward coordinator can consume it exactly once.
+								if result.Death then
+									pendingDeaths[id] = copyDeath(result.Death)
+								end
+								return result.AppliedDamage, nil
+							end,
+						})
+					end
 				end
 			end
 			return targets, nil

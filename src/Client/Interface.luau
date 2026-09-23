@@ -366,7 +366,7 @@ function Interface.New(player: Player)
 	local gearPanel, gearContent = panel("Gear — Inventory")
 	local ascendPanel, ascendContent = panel("Ascension")
 	local offlinePanel, offlineContent = panel("Offline Training")
-	local mapPanel, mapContent = panel("Map — The Marchlands", 340)
+	local mapPanel, mapContent = panel("Map — The Borderlands", 340)
 	local shopPanel, shopContent = panel("Shop", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
 	local skillsPanel, skillsContent = panel("Skills — Progress", 320)
@@ -1460,8 +1460,24 @@ function Interface.New(player: Player)
 			return
 		end
 		if ctx.NearNode == true then
-			local node = if lastState and type(lastState.GatheringNodes) == "table" then lastState.GatheringNodes[1] else nil
-			local name = if node then node.DisplayName else "Iron Ore"
+			-- Show the node the player is ACTUALLY standing at (ctx.NearNodeId), not GatheringNodes[1] --
+			-- with both Iron and Coal defined, [1] is whichever sorts first, so it mislabelled the panel.
+			local nodes = if lastState and type(lastState.GatheringNodes) == "table" then lastState.GatheringNodes else nil
+			local node = nil
+			if nodes then
+				if type(ctx.NearNodeId) == "string" then
+					for _, candidate in nodes do
+						if candidate.NodeId == ctx.NearNodeId then
+							node = candidate
+							break
+						end
+					end
+				end
+				if node == nil then
+					node = nodes[1]
+				end
+			end
+			local name = if node then node.DisplayName else "Resource"
 			local reqLevel = if node then node.RequiredMiningLevel else 1
 			contextTitle.Text = ("%s  —  Mining Lv %s"):format(tostring(name), tostring(reqLevel))
 			local tool = lastState and lastState.Equipment and lastState.Equipment[EquipmentSlots.Tool]

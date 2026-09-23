@@ -46,6 +46,9 @@ export type AttackResult = {
 	XPReason: string?,
 	-- How many nearby secondary enemies took Cleave splash damage this hit (0 without the mastery).
 	CleaveHits: number,
+	-- Runtime ids of the cleaved secondary enemies, so the reward coordinator can consume any resulting
+	-- deaths exactly once and pay their Gold (group farming). Empty without the mastery.
+	CleaveTargetIds: { string },
 }
 
 -- Keeps a fully-stacked attack-interval reduction from ever reaching (or passing) the base interval,
@@ -93,7 +96,7 @@ end
 
 -- Given a primary target id, returns lightweight secondary targets (each with an ApplyDamage closure)
 -- for Melee "Cleave" splash. Optional: without it, cleave is simply never applied.
-export type CleaveTarget = { ApplyDamage: (number) -> (number?, string?) }
+export type CleaveTarget = { RuntimeId: string, ApplyDamage: (number) -> (number?, string?) }
 export type CleaveResolver = (string) -> ({ CleaveTarget }?, string?)
 
 function Service.New(equipment: Equipment, skills: Skills, resolveTarget: TargetResolver, configuration: Configuration, clock: () -> number, meleeModifiers: MeleeModifierProvider?, resolveCleaveTargets: CleaveResolver?)
@@ -184,6 +187,7 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 		-- crowd control and best-effort -- secondary hits never affect the primary result, cooldown, XP,
 		-- or Gold (cleaved kills bypass the reward path), and any secondary failure is ignored.
 		local cleaveHits = 0
+		local cleaveTargetIds: { string } = {}
 		local cleaveBonus = math.max(0, modifierTotal(meleeModifierTotals, "MeleeCleaveDamageBonus"))
 		if cleaveBonus > 0 and resolveCleaveTargets ~= nil then
 			local cleaveDamage = effectiveDamage * cleaveBonus
@@ -195,6 +199,11 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 							local applied = secondary.ApplyDamage(cleaveDamage)
 							if type(applied) == "number" and applied > 0 then
 								cleaveHits += 1
+								-- Report the id so the reward coordinator can consume a cleaved death exactly
+								-- once and pay its Gold (group farming), without Combat owning any reward logic.
+								if type(secondary.RuntimeId) == "string" then
+									table.insert(cleaveTargetIds, secondary.RuntimeId)
+								end
 							end
 						end
 					end
@@ -216,6 +225,7 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 			XPGranted = xpReason == nil,
 			XPReason = xpReason,
 			CleaveHits = cleaveHits,
+			CleaveTargetIds = cleaveTargetIds,
 		}, nil
 	end
 

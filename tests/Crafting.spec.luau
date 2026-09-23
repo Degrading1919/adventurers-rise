@@ -328,15 +328,19 @@ test("equipment material efficiency is clamped so a craft always costs at least 
 	equal(f.Records[7].Inventory.Stacks[IronBar], 2) -- clamped: ceil(3 * 0.1) == 1 consumed, never 0/free
 end)
 
-test("ProcessingSpeedBonus does not change authoritative crafting (no action-time exists to shorten)", function()
-	local base = fixture({ "base_sword" })
-	base.Records[7].Inventory.Stacks[IronBar] = 3
-	assert(base.Service.Craft(7, SwordRecipe))
-	local withSpeed = fixture({ "speed_sword" }, function() return { ProcessingSpeedBonus = 0.9 } end)
-	withSpeed.Records[7].Inventory.Stacks[IronBar] = 3
-	assert(withSpeed.Service.Craft(7, SwordRecipe))
-	-- Identical consumption: ProcessingSpeedBonus is read but truthfully has nothing to act on.
-	equal(withSpeed.Records[7].Inventory.Stacks[IronBar], base.Records[7].Inventory.Stacks[IronBar])
+test("Smelter (ProcessingEfficiencyBonus) reduces ore used for SMELTING, but not for an equipment craft", function()
+	-- Smelting recipe (Iron Ore -> Iron Bar): Smelter cuts the ore input. 2-ore recipe at 0.5 ->
+	-- ceil(2 * (1 - 0.5)) = 1 ore consumed (never 0/free).
+	local smelt = fixture(nil, function() return { ProcessingEfficiencyBonus = 0.5 } end)
+	smelt.Records[7].Inventory.Stacks[IronOre] = 4
+	assert(smelt.Service.Craft(7, IronBarRecipe))
+	equal(smelt.Records[7].Inventory.Stacks[IronOre], 3)
+	-- ProcessingEfficiencyBonus does NOT discount an EQUIPMENT craft (that is Forgemaster's role): the
+	-- upgraded sword still consumes its full 3 bars.
+	local equip = fixture({ "sword1" }, function() return { ProcessingEfficiencyBonus = 0.5 } end)
+	equip.Records[7].Inventory.Stacks[IronBar] = 3
+	assert(equip.Service.Craft(7, SwordRecipe))
+	equal(equip.Records[7].Inventory.Stacks[IronBar], nil) -- full 3 bars consumed (empty stack is removed, not 0)
 end)
 
 test("a respec clearing Forgemaster nodes restores full material cost immediately (equipment craft)", function()

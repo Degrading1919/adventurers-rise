@@ -389,6 +389,7 @@ function Controller.New(player: Player, net: any, iface: any, equipmentVisuals: 
 		iface.SetContext({
 			NearStationId = currentStationId,
 			NearNode = node ~= nil,
+			NearNodeId = currentNodeId,
 			NearForge = forge ~= nil,
 			NearShop = shop ~= nil,
 			TrainingActive = trainingActive,

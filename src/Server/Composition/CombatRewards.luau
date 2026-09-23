@@ -88,6 +88,28 @@ function Service.New(combat: Combat, enemies: Enemies, economy: Economy, bosses:
 			end
 		end
 
+		-- Cleave rewards (docs/MASTERY_TREES: Cleave supports GROUP FARMING). Each cleaved NORMAL-enemy
+		-- death is consumed exactly once and paid its Gold on the same flow as a primary kill, so farming a
+		-- pack with Cleave actually rewards the extra kills. Bosses are excluded from cleave targets
+		-- upstream (Enemies.CreateCleaveResolver), so no boss/participation/contribution path is touched
+		-- here. Best-effort and pcall/warn-isolated: a cleave-reward failure never fails the primary attack.
+		local cleaveTargetIds = (result :: any).CleaveTargetIds
+		if type(cleaveTargetIds) == "table" then
+			for _, cleavedId in cleaveTargetIds do
+				local cleavedDeath = enemies.ConsumeDeath(cleavedId)
+				if cleavedDeath then
+					pcall(onNormalEnemyDefeated, userId, (cleavedDeath :: any).DefinitionId)
+					local goldReward = (cleavedDeath :: any).GoldReward
+					if type(goldReward) == "number" and goldReward > 0 then
+						local _, goldReason = economy.CreditGold(userId, goldReward)
+						if goldReason then
+							warn(("[CombatRewards] Cleave Gold credit failed for %d on %s: %s"):format(userId, tostring(cleavedId), tostring(goldReason)))
+						end
+					end
+				end
+			end
+		end
+
 		return result, nil
 	end
 
