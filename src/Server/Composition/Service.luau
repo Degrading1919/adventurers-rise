@@ -70,6 +70,7 @@ export type WorldAdapters = {
 	read ForgeDistanceProvider: (number) -> (number?, string?),
 	read ShopDistanceProvider: (number, string) -> (number?, string?),
 	read PlayerZoneResolver: (number) -> (string?, string?),
+	read CleaveTargetsProvider: (string) -> ({ string }?, string?),
 }
 export type RequestResult = {
 	Ok: boolean,
@@ -147,7 +148,8 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			and type(worldAdapters.StationDistanceProvider) == "function"
 			and type(worldAdapters.ForgeDistanceProvider) == "function"
 			and type(worldAdapters.ShopDistanceProvider) == "function"
-			and type(worldAdapters.PlayerZoneResolver) == "function",
+			and type(worldAdapters.PlayerZoneResolver) == "function"
+			and type(worldAdapters.CleaveTargetsProvider) == "function",
 		"Composition requires injected world adapters"
 	)
 
@@ -296,7 +298,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local plots = PlotsService.New(playerData, skills)
 	local enemies = EnemiesService.New({ NewRuntimeId = runtime.NewRuntimeId, RollInteger = runtime.RollInteger })
 	local combatTargetResolver = enemies.CreateCombatTargetResolver(worldAdapters.CombatDistanceProvider)
-	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock, meleeModifiers)
+	-- Melee "Cleave" mastery: a resolver that turns "enemies physically near the primary target" (a world
+	-- query) into secondary damage targets, so Combat can splash without knowing the physical scene.
+	local cleaveResolver = enemies.CreateCleaveResolver(worldAdapters.CleaveTargetsProvider)
+	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock, meleeModifiers, cleaveResolver)
 	local gathering = GatheringService.New(playerData, equipment, inventory, skills, worldAdapters.GatheringNodeResolver, miningModifiers)
 	local crafting = CraftingService.New(playerData, inventory, skills, smithingModifiersFromData)
 	ascension = AscensionService.New(playerData, skills)

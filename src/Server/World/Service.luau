@@ -302,6 +302,31 @@ function Service.New(runtime: Runtime)
 	-- GatheringNodeResolver: (userId, nodeId) -> (Node, reason). Iron Ore is non-depleting, so a
 	-- physically present node is always Eligible. Several physical rocks may share one stable node ID;
 	-- the nearest one to the gatherer decides the reported Distance.
+	-- CleaveTargetsProvider: (primaryRuntimeId) -> ({ runtimeIds }, reason). Runtime ids of OTHER enemies
+	-- physically within the cleave radius of the primary target. World only answers "who is near whom";
+	-- alive/eligibility and damage stay in the repository Enemies service (its ApplyDamage rejects the
+	-- dead), so a fading corpse in range is a harmless no-op.
+	local CLEAVE_RADIUS_STUDS = 12
+	function service.CleaveTargetsProvider(primaryRuntimeId: string): ({ string }?, string?)
+		if type(primaryRuntimeId) ~= "string" or primaryRuntimeId == "" then
+			return nil, "InvalidRuntimeId"
+		end
+		local primaryModel = enemyModels[primaryRuntimeId]
+		if not primaryModel or not primaryModel.Parent then
+			return nil, "EnemyInstanceNotFound"
+		end
+		local origin = primaryModel:GetPivot().Position
+		local nearby: { string } = {}
+		for runtimeId, model in enemyModels do
+			if runtimeId ~= primaryRuntimeId and model and model.Parent then
+				if (origin - model:GetPivot().Position).Magnitude <= CLEAVE_RADIUS_STUDS then
+					table.insert(nearby, runtimeId)
+				end
+			end
+		end
+		return nearby, nil
+	end
+
 	function service.GatheringNodeResolver(userId: number, nodeId: string): (any?, string?)
 		if type(nodeId) ~= "string" or nodeId == "" then
 			return nil, "InvalidNodeId"

@@ -44,6 +44,8 @@ export type AttackResult = {
 	MeleeXP: number,
 	XPGranted: boolean,
 	XPReason: string?,
+	-- How many nearby secondary enemies took Cleave splash damage this hit (0 without the mastery).
+	CleaveHits: number,
 }
 
 -- Keeps a fully-stacked attack-interval reduction from ever reaching (or passing) the base interval,
@@ -89,13 +91,19 @@ local function validMelee(data: any): boolean
 		and finitePositive(data.AttackRange)
 end
 
-function Service.New(equipment: Equipment, skills: Skills, resolveTarget: TargetResolver, configuration: Configuration, clock: () -> number, meleeModifiers: MeleeModifierProvider?)
+-- Given a primary target id, returns lightweight secondary targets (each with an ApplyDamage closure)
+-- for Melee "Cleave" splash. Optional: without it, cleave is simply never applied.
+export type CleaveTarget = { ApplyDamage: (number) -> (number?, string?) }
+export type CleaveResolver = (string) -> ({ CleaveTarget }?, string?)
+
+function Service.New(equipment: Equipment, skills: Skills, resolveTarget: TargetResolver, configuration: Configuration, clock: () -> number, meleeModifiers: MeleeModifierProvider?, resolveCleaveTargets: CleaveResolver?)
 	assert(type(equipment) == "table" and type(equipment.GetEquippedItem) == "function", "Combat requires Equipment")
 	assert(type(skills) == "table" and type(skills.AwardXP) == "function", "Combat requires Skills")
 	assert(type(resolveTarget) == "function", "Combat requires a trusted target resolver")
 	assert(type(configuration) == "table" and finitePositive(configuration.MeleeXPPerSuccessfulHit), "Combat requires a positive Melee XP amount")
 	assert(type(clock) == "function", "Combat requires a clock")
 	assert(meleeModifiers == nil or type(meleeModifiers) == "function", "Combat meleeModifiers must be a function when provided")
+	assert(resolveCleaveTargets == nil or type(resolveCleaveTargets) == "function", "Combat resolveCleaveTargets must be a function when provided")
 	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep exact prior
 	-- behavior. Composition injects the real server-authoritative provider.
 	local resolveMeleeModifiers: MeleeModifierProvider = meleeModifiers or function()
@@ -171,6 +179,29 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 		end
 
 		nextAttackAt[userId] = now + effectiveInterval
+
+		-- Melee "Cleave" mastery: splash a fraction of the primary hit's damage to nearby enemies. Pure
+		-- crowd control and best-effort -- secondary hits never affect the primary result, cooldown, XP,
+		-- or Gold (cleaved kills bypass the reward path), and any secondary failure is ignored.
+		local cleaveHits = 0
+		local cleaveBonus = math.max(0, modifierTotal(meleeModifierTotals, "MeleeCleaveDamageBonus"))
+		if cleaveBonus > 0 and resolveCleaveTargets ~= nil then
+			local cleaveDamage = effectiveDamage * cleaveBonus
+			if cleaveDamage > 0 then
+				local secondaries = resolveCleaveTargets(targetId)
+				if type(secondaries) == "table" then
+					for _, secondary in secondaries do
+						if type(secondary) == "table" and type(secondary.ApplyDamage) == "function" then
+							local applied = secondary.ApplyDamage(cleaveDamage)
+							if type(applied) == "number" and applied > 0 then
+								cleaveHits += 1
+							end
+						end
+					end
+				end
+			end
+		end
+
 		local _, xpReason = skills.AwardXP(userId, SkillIds.Melee, configuration.MeleeXPPerSuccessfulHit)
 		return {
 			AttackerUserId = userId,
@@ -184,6 +215,7 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 			MeleeXP = configuration.MeleeXPPerSuccessfulHit,
 			XPGranted = xpReason == nil,
 			XPReason = xpReason,
+			CleaveHits = cleaveHits,
 		}, nil
 	end
 

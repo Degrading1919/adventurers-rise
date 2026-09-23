@@ -307,6 +307,39 @@ function Service.New(runtime: Runtime)
 		end
 	end
 
+	-- Builds the Melee "Cleave" resolver: given a primary target, returns lightweight secondary targets
+	-- (each an ApplyDamage closure over this Enemies service) for every OTHER enemy the injected world
+	-- provider reports as physically near it. Cleave damage bypasses the reward/death-queue path on
+	-- purpose -- it is crowd control, not a Gold source -- so a cleaved kill simply dies and respawns.
+	function service.CreateCleaveResolver(nearbyProvider: (string) -> ({ string }?, string?))
+		assert(type(nearbyProvider) == "function", "Enemies requires a trusted cleave-targets provider")
+		return function(primaryRuntimeId: string): ({ { ApplyDamage: (number) -> (number?, string?) } }?, string?)
+			if not validStableId(primaryRuntimeId) then
+				return nil, "InvalidRuntimeId"
+			end
+			local ids, reason = nearbyProvider(primaryRuntimeId)
+			if type(ids) ~= "table" then
+				return nil, reason or "NoCleaveTargets"
+			end
+			local targets: { { ApplyDamage: (number) -> (number?, string?) } } = {}
+			for _, runtimeId in ids do
+				if validStableId(runtimeId) and runtimeId ~= primaryRuntimeId then
+					local id = runtimeId
+					table.insert(targets, {
+						ApplyDamage = function(amount: number): (number?, string?)
+							local result, damageReason = service.ApplyDamage(id, amount)
+							if not result then
+								return nil, damageReason
+							end
+							return result.AppliedDamage, nil
+						end,
+					})
+				end
+			end
+			return targets, nil
+		end
+	end
+
 	return table.freeze(service)
 end
 

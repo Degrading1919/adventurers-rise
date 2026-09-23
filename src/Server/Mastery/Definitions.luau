@@ -121,7 +121,7 @@ local meleeCleave = branch(
 	"Cleave",
 	"Sweeping Strikes",
 	"MeleeCleaveDamageBonus",
-	function(p) return "+" .. p .. " damage against secondary cleave targets (reserved for future multi-target combat)." end,
+	function(p) return p .. " of your hit splashed as damage to nearby enemies." end,
 	MasteryIds.Nodes.MeleeCleave
 )
 

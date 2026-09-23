@@ -150,6 +150,8 @@ local function buildStack(options: any?)
 	local shopDistances: { [string]: number } = {}
 	-- Which zone each user is standing in, for the Discovery adapter (nil == open wilderness).
 	local playerZones: { [number]: string } = {}
+	-- Runtime ids of enemies near a given primary target, for the Cleave adapter.
+	local cleaveTargets: { [string]: { string } } = {}
 	local worldAdapters = {
 		CombatDistanceProvider = function(_attackerUserId: number, enemyState: any): (number?, string?)
 			local distance = combatDistances[enemyState.RuntimeId]
@@ -189,6 +191,9 @@ local function buildStack(options: any?)
 			end
 			return zoneId, nil
 		end,
+		CleaveTargetsProvider = function(primaryRuntimeId: string): ({ string }?, string?)
+			return cleaveTargets[primaryRuntimeId] or {}, nil
+		end,
 	}
 
 	local roll01 = { Value = 0 }
@@ -226,6 +231,7 @@ local function buildStack(options: any?)
 	f.Composition = composition
 	f.CombatDistances = combatDistances
 	f.PlayerZones = playerZones
+	f.CleaveTargets = cleaveTargets
 	f.GatheringNodes = gatheringNodes
 	f.StationDistances = stationDistances
 	f.ForgeDistance = forgeDistance
@@ -575,6 +581,32 @@ test("selecting a Melee Might node raises real attack damage through the compose
 	assert(boosted.Ok, boosted.Reason)
 	-- +2% MeleeDamageBonus from the one selected node (10 -> 10.2), applied by the real provider.
 	assert(boosted.Result.AppliedDamage > 10 and boosted.Result.AppliedDamage < 10.5, "expected a small damage increase, got " .. tostring(boosted.Result.AppliedDamage))
+end)
+
+test("Melee Cleave splashes damage from the primary hit onto nearby enemies", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	setSkillLevel(f, 7, SkillIds.Melee, 5) -- earns 1 Mastery point; Cleave I requires level 5
+	local primary = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	local secondary = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[primary.RuntimeId] = 1
+	f.CleaveTargets[primary.RuntimeId] = { secondary.RuntimeId }
+
+	-- Without Cleave selected, a landed hit leaves the nearby secondary untouched.
+	local before = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = primary.RuntimeId })
+	assert(before.Ok, before.Reason)
+	equal(before.Result.CleaveHits, 0)
+	equal(assert(f.Composition.Services.Enemies.GetSnapshot(secondary.RuntimeId)).Health, secondary.MaxHealth)
+
+	-- Select Cleave I, then attack: the primary's hit now splashes onto the secondary.
+	f.Advance(2)
+	assert(request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Melee, NodeId = MasteryIds.Nodes.MeleeCleave[1] }).Ok)
+	local after = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = primary.RuntimeId })
+	assert(after.Ok, after.Reason)
+	equal(after.Result.CleaveHits, 1)
+	local secondaryHealth = assert(f.Composition.Services.Enemies.GetSnapshot(secondary.RuntimeId)).Health
+	assert(secondaryHealth < secondary.MaxHealth, "secondary should have taken cleave splash damage")
 end)
 
 test("selecting a Defense Fortitude node raises the composed player's maximum health", function()
