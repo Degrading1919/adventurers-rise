@@ -95,18 +95,37 @@ function EquipmentVisuals.New(player: Player)
 	end
 
 	local function attachVisual(character: Model, slotId: string, definitionId: string)
-		local library = templatesFolder()
-		local template = library and library:FindFirstChild(definitionId)
-		if not template or not template:IsA("Model") or template.PrimaryPart == nil then
-			return
-		end
 		local limbName = SLOT_LIMBS[slotId]
 		local limb = limbFor(character, limbName)
 		if not limb then
 			return
 		end
 
-		local model = (template :: Model):Clone()
+		local library = templatesFolder()
+		local template = library and library:FindFirstChild(definitionId)
+		local model: Model
+		if template and template:IsA("Model") and (template :: Model).PrimaryPart ~= nil then
+			model = (template :: Model):Clone()
+		else
+			-- Procedural placeholder so a held item always reads even before art import (mirrors the armour
+			-- shells): a metal blade for weapons, a wooden haft for tools. Same weld/grip path as templates.
+			model = Instance.new("Model")
+			local held = Instance.new("Part")
+			held.Name = "Placeholder"
+			if slotId == EquipmentSlots.Weapon then
+				held.Size = Vector3.new(0.22, 3, 0.22)
+				held.Color = Color3.fromRGB(205, 210, 220)
+				held.Material = Enum.Material.Metal
+			else
+				held.Size = Vector3.new(0.3, 2.4, 0.3)
+				held.Color = Color3.fromRGB(120, 85, 55)
+				held.Material = Enum.Material.Wood
+			end
+			held.TopSurface = Enum.SurfaceType.Smooth
+			held.BottomSurface = Enum.SurfaceType.Smooth
+			held.Parent = model
+			model.PrimaryPart = held
+		end
 		model.Name = ATTACHMENT_PREFIX .. slotId
 		for _, part in model:GetDescendants() do
 			if part:IsA("BasePart") then

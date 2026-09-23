@@ -1178,8 +1178,16 @@ function Interface.New(player: Player)
 	-- and the single most salient unmet requirement (boss first -- it's a landmark + a place -- then the
 	-- skill gates), so the player always has a concrete reason and direction. Nil at the top of the ladder.
 	local function nextRankGoal(ascension: any): ({ Title: string, Hint: string })?
-		if type(ascension) ~= "table" or type(ascension.NextRank) ~= "table" then
+		if type(ascension) ~= "table" then
 			return nil
+		end
+		if type(ascension.NextRank) ~= "table" then
+			-- Top of the ladder: keep a forward-looking goal so the endgame never dead-ends into a blank
+			-- banner. There is always more to master, and new regions are on the roadmap.
+			return {
+				Title = ("Highest rank: %s"):format(tostring(ascension.RankDisplayName or "—")),
+				Hint = "Master every skill tree and gear tier — new frontiers are on the way.",
+			}
 		end
 		local nextRank = ascension.NextRank
 		local p = nextRank.Progress
