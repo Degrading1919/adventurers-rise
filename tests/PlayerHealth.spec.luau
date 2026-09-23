@@ -151,4 +151,32 @@ test("spoofed or non-numeric Defense modifier values contribute no MaxHealth bon
 	equal(assert(negative.GetState(7)).MaxHealth, 100)
 end)
 
+-- ===== Defense Mastery: Resilience regeneration =====
+
+test("Resilience RecoveryBonus regenerates a below-max living player; no bonus, full, and dead never heal", function()
+	local recovery = 0.1
+	local s = PlayerHealth.New({ MaxHealth = 100 }, function() return { RecoveryBonus = recovery } end)
+	-- Damage to 60, then 1s of regen: heal = 100 * 0.1 * 0.5 * 1 = 5 -> 65.
+	assert(s.ApplyDamage(7, 40))
+	s.Regenerate(7, 1)
+	equal(assert(s.GetState(7)).Health, 65)
+	-- Regen never overshoots the maximum.
+	s.Regenerate(7, 9999)
+	equal(assert(s.GetState(7)).Health, 100)
+	-- A full player needs no regen (no-op), and invalid dt is ignored.
+	s.Regenerate(7, 5)
+	s.Regenerate(7, 0)
+	equal(assert(s.GetState(7)).Health, 100)
+	-- No RecoveryBonus means no regeneration at all (baseline players are unchanged).
+	recovery = 0
+	assert(s.ApplyDamage(7, 30))
+	s.Regenerate(7, 10)
+	equal(assert(s.GetState(7)).Health, 70)
+	-- A dead player does not self-heal.
+	recovery = 0.1
+	assert(s.ApplyDamage(7, 9999))
+	s.Regenerate(7, 10)
+	equal(s.IsAlive(7), false)
+end)
+
 print(("%d PlayerHealth checks passed"):format(passed))

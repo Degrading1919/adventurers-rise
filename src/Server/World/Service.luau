@@ -789,13 +789,19 @@ function Service.New(runtime: Runtime)
 	-- Spawns the enemy populations for every territory (and any legacy single-spawn marker), binds each
 	-- to a repository runtime instance, starts the shared death poll, and -- when a Heartbeat is
 	-- available -- the server-authoritative movement loop.
-	function service.Start(enemies: Enemies, enemyCombat: EnemyCombat)
+	function service.Start(enemies: Enemies, enemyCombat: EnemyCombat, playerHealth: any?)
 		assert(
 			type(enemies) == "table"
 				and type(enemies.Create) == "function"
 				and type(enemies.GetSnapshot) == "function"
 				and type(enemies.Remove) == "function",
 			"World.Start requires the repository Enemies service"
+		)
+		-- Optional: when the runtime health service is provided, the shared poll below also ticks Defense
+		-- "Resilience" regeneration for every player, on the same authoritative cadence as enemy attacks.
+		assert(
+			playerHealth == nil or (type(playerHealth) == "table" and type(playerHealth.Regenerate) == "function"),
+			"World.Start playerHealth must expose Regenerate when provided"
 		)
 		assert(
 			type(enemyCombat) == "table"
@@ -912,11 +918,24 @@ function Service.New(runtime: Runtime)
 			end
 		end
 
+		-- Ticks Resilience regeneration for every connected player on the same beat as enemy attacks, so
+		-- recovery and incoming damage resolve against the same authoritative cadence. No-op without a
+		-- health service or for players with no RecoveryBonus.
+		local function regenPass(dt: number)
+			if playerHealth == nil then
+				return
+			end
+			for _, player in runtime.Players:GetPlayers() do
+				playerHealth.Regenerate(player.UserId, dt)
+			end
+		end
+
 		runtime.Spawn(function()
 			while true do
 				runtime.Wait(DEATH_POLL_SECONDS)
 				pollDeaths(enemies, enemyCombat)
 				attackPass(enemies, enemyCombat)
+				regenPass(DEATH_POLL_SECONDS)
 			end
 		end)
 

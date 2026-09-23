@@ -138,6 +138,32 @@ function Service.New(configuration: Configuration, defenseModifiers: DefenseModi
 		return { Health = current, MaxHealth = resolveMaxHealth(userId), AppliedDamage = applied, Died = current <= 0 }, nil
 	end
 
+	-- Defense "Resilience" mastery (RecoveryBonus) regenerates a below-max, living player's health over
+	-- time; World ticks this on its shared heartbeat. No RecoveryBonus == no regen, so this is purely the
+	-- reward for the Resilience branch -- baseline players (and all existing tests) are unchanged. The
+	-- heal rate scales with the player's own maximum health, so it stays proportional as they toughen.
+	local REGEN_MAXHEALTH_FRACTION_PER_SECOND = 0.5
+	function service.Regenerate(userId: number, deltaSeconds: number): ()
+		if not validUserId(userId) or not finitePositive(deltaSeconds) then
+			return
+		end
+		local recovery = math.max(0, modifierTotal(resolveDefenseModifiers(userId), "RecoveryBonus"))
+		if recovery <= 0 then
+			return
+		end
+		local max = resolveMaxHealth(userId)
+		local current = currentHealth(userId)
+		-- Dead players don't self-heal; full players need nothing.
+		if current <= 0 or current >= max then
+			return
+		end
+		local healed = current + max * recovery * REGEN_MAXHEALTH_FRACTION_PER_SECOND * deltaSeconds
+		if healed > max then
+			healed = max
+		end
+		health[userId] = healed
+	end
+
 	return table.freeze(service)
 end
 

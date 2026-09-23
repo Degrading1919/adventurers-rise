@@ -149,7 +149,7 @@ local defenseResilience = branch(
 	"Resilience",
 	"Steady Recovery",
 	"RecoveryBonus",
-	function(p) return "+" .. p .. " recovery and resistance to disruptive effects (reserved for future status/recovery systems)." end,
+	function(p) return "+" .. p .. " health regeneration over time (scaled by your maximum health)." end,
 	MasteryIds.Nodes.DefenseResilience
 )
 
