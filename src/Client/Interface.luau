@@ -6,6 +6,7 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
+local CollectionService = game:GetService("CollectionService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local SkillIds = require(Shared:WaitForChild("SkillIds"))
@@ -1122,19 +1123,77 @@ function Interface.New(player: Player)
 	local STARTER_FOCUS_STEP_ID = "onboarding_starter_focus"
 	local lastObjectiveStepId: string? = nil
 	local starterAutoOpened = false
+	-- Whether the objective banner is currently showing an onboarding step or the post-onboarding
+	-- Ascension goal, so a tap routes to the right place.
+	local objectiveMode: string = "onboarding"
+	-- Where each boss-milestone requirement is earned, so the next-rank goal can name a PLACE to go.
+	local MILESTONE_INFO: { [string]: { Boss: string, Zone: string } } = {
+		flag_boss_goblin_chieftain_defeated = { Boss = "Goblin Chieftain", Zone = "the Goblin Warren" },
+		flag_boss_bandit_warlord_defeated = { Boss = "Bandit Warlord", Zone = "the Ashen Ruins" },
+	}
+	-- After onboarding, the objective banner becomes a live "next Ascension rank" goal: it names the rank
+	-- and the single most salient unmet requirement (boss first -- it's a landmark + a place -- then the
+	-- skill gates), so the player always has a concrete reason and direction. Nil at the top of the ladder.
+	local function nextRankGoal(ascension: any): ({ Title: string, Hint: string })?
+		if type(ascension) ~= "table" or type(ascension.NextRank) ~= "table" then
+			return nil
+		end
+		local nextRank = ascension.NextRank
+		local p = nextRank.Progress
+		if type(p) ~= "table" then
+			return nil
+		end
+		local hint: string? = nil
+		if type(p.BossMilestone) == "table" and p.BossMilestone.Met ~= true then
+			local info = MILESTONE_INFO[p.BossMilestone.MilestoneId]
+			hint = if info then ("Defeat the %s in %s"):format(info.Boss, info.Zone) else "Defeat the region boss"
+		end
+		if not hint and type(p.Offense) == "table" and p.Offense.Met ~= true and type(p.Offense.Alternatives) == "table" then
+			local alt = p.Offense.Alternatives[1]
+			if alt then
+				hint = ("Train %s to Level %d (%d/%d)"):format(SKILL_LABELS[alt.SkillId] or alt.SkillId, alt.RequiredLevel, alt.CurrentLevel, alt.RequiredLevel)
+			end
+		end
+		if not hint and type(p.Defense) == "table" and p.Defense.Met ~= true then
+			hint = ("Train Defense to Level %d (%d/%d)"):format(p.Defense.RequiredLevel, p.Defense.CurrentLevel, p.Defense.RequiredLevel)
+		end
+		if not hint and type(p.OverallSkilling) == "table" and p.OverallSkilling.Met ~= true and type(p.OverallSkilling.Thresholds) == "table" then
+			for _, th in p.OverallSkilling.Thresholds do
+				if th.Met ~= true then
+					hint = ("Train %s to Level %d (%d/%d)"):format(SKILL_LABELS[th.SkillId] or th.SkillId, th.RequiredLevel, th.CurrentLevel, th.RequiredLevel)
+					break
+				end
+			end
+		end
+		if not hint then
+			hint = ("All set — open Menu → Ascend to become %s!"):format(tostring(nextRank.DisplayName))
+		end
+		return { Title = ("Next rank: %s"):format(tostring(nextRank.DisplayName)), Hint = hint }
+	end
 	local function renderObjective(state: any)
 		local ob = state.Onboarding
 		if type(ob) ~= "table" then
 			return
 		end
 		if ob.Complete == true then
-			objective.Visible = false
 			if lastObjectiveStepId ~= nil and lastObjectiveStepId ~= "__complete__" then
 				showToast("You're now an Adept — your guided journey is complete!", COLORS.Good)
 			end
 			lastObjectiveStepId = "__complete__"
+			-- Onboarding done: the objective banner becomes the live "next Ascension rank" goal, routing
+			-- the player toward the next rank (and the boss/skills it needs). Nil only at the top rank.
+			local goal = nextRankGoal(state.Ascension)
+			if goal then
+				objectiveMode = "ascension"
+				objective.Visible = not bossActive
+				objectiveTitle.Text = goal.Title
+				objectiveHint.Text = goal.Hint
+			else
+				objective.Visible = false
+			end
 			return
 		end
+		objectiveMode = "onboarding"
 		-- Yields to the boss bar so the two top-center surfaces never compete for attention.
 		objective.Visible = not bossActive
 		local progressText = ""
@@ -1154,9 +1213,14 @@ function Interface.New(player: Player)
 		end
 		lastObjectiveStepId = ob.StepId
 	end
-	-- Tapping the objective on the starter-focus step reopens its framing panel.
+	-- Tapping the objective routes the player: on the starter-focus step it reopens that framing panel;
+	-- once it is the post-onboarding Ascension goal, it opens the Ascend panel (the full requirement list).
 	objective.Activated:Connect(function()
-		if lastObjectiveStepId == STARTER_FOCUS_STEP_ID then
+		if objectiveMode == "ascension" then
+			hideAllPanels()
+			renderAscend()
+			ascendPanel.Visible = true
+		elseif lastObjectiveStepId == STARTER_FOCUS_STEP_ID then
 			hideAllPanels()
 			starterPanel.Visible = true
 		end
@@ -1517,6 +1581,17 @@ function Interface.New(player: Player)
 	make("UICorner", { CornerRadius = UDim.new(1, 0) }, playerDot)
 	make("UIStroke", { Color = COLORS.Text, Thickness = 1.5 }, playerDot)
 
+	-- The boss whose milestone gates the player's NEXT rank tells the map which zone to flag as the
+	-- current goal; boss arenas are plotted so that goal has a visible place. Keyed by the stable ids the
+	-- read model / territory markers report.
+	local MAP_MILESTONE_ZONE: { [string]: string } = {
+		flag_boss_goblin_chieftain_defeated = "zone_goblin_warren",
+		flag_boss_bandit_warlord_defeated = "zone_ashen_ruins",
+	}
+	local MAP_BOSS_LABELS: { [string]: string } = {
+		enemy_goblin_chieftain = "Goblin Chieftain",
+		enemy_bandit_warlord = "Bandit Warlord",
+	}
 	local function renderMap()
 		for _, child in mapArea:GetChildren() do
 			if child ~= playerDot and (child:IsA("Frame") or child:IsA("TextLabel")) then
@@ -1524,9 +1599,28 @@ function Interface.New(player: Player)
 			end
 		end
 		local discovered = (lastState and lastState.Discovery and lastState.Discovery.DiscoveredZoneIds) or {}
+		-- Which zone is the current objective: the one holding the boss the player's next rank still needs.
+		local objectiveZoneId: string? = nil
+		local nextRank = lastState and lastState.Ascension and lastState.Ascension.NextRank
+		if type(nextRank) == "table" and type(nextRank.Progress) == "table" then
+			local milestone = nextRank.Progress.BossMilestone
+			if type(milestone) == "table" and milestone.Met ~= true then
+				objectiveZoneId = MAP_MILESTONE_ZONE[milestone.MilestoneId]
+			end
+		end
 		for i, zone in RegionDefinitions.Zones do
 			local u, v = worldToMapScale(zone.CenterX, zone.CenterZ)
 			local known = zone.Safe == true or discovered[zone.Id] == true
+			local isObjective = zone.Id == objectiveZoneId
+			-- Highlight ring behind the current-objective zone so the player sees WHERE to go next.
+			if isObjective then
+				local ring = make("Frame", {
+					Size = UDim2.new(0, 30, 0, 30), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
+					BackgroundColor3 = COLORS.Good, BackgroundTransparency = 0.75, BorderSizePixel = 0, ZIndex = 2,
+				}, mapArea)
+				make("UICorner", { CornerRadius = UDim.new(1, 0) }, ring)
+				make("UIStroke", { Color = COLORS.Good, Thickness = 1.5, Transparency = 0.1 }, ring)
+			end
 			local dot = make("Frame", {
 				Size = UDim2.new(0, 14, 0, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
 				BackgroundColor3 = if known then (TIER_COLORS[zone.Tier] or COLORS.Accent) else COLORS.Dim,
@@ -1539,10 +1633,32 @@ function Interface.New(player: Player)
 			make("TextLabel", {
 				Size = UDim2.new(0, 118, 0, 14), AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(u, 0, v, labelYOffset),
 				BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
-				TextColor3 = if known then COLORS.Text else COLORS.Dim,
-				Text = if known then zone.DisplayName else "???",
+				TextColor3 = if isObjective then COLORS.Good elseif known then COLORS.Text else COLORS.Dim,
+				Text = if isObjective then ("▶ " .. zone.DisplayName) elseif known then zone.DisplayName else "???",
 				ZIndex = 4,
 			}, mapArea)
+		end
+
+		-- Plot the boss arenas (from their placed territory markers) as red diamonds, so the map shows the
+		-- landmark goals -- and, with the objective ring above, exactly which boss the next rank needs.
+		for _, marker in CollectionService:GetTagged("AR_EnemyTerritory") do
+			if marker:IsA("BasePart") then
+				local definitionId = marker:GetAttribute("EnemyDefinitionId")
+				local label = if type(definitionId) == "string" then MAP_BOSS_LABELS[definitionId] else nil
+				if label then
+					local u, v = worldToMapScale(marker.Position.X, marker.Position.Z)
+					local diamond = make("Frame", {
+						Size = UDim2.new(0, 12, 0, 12), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
+						BackgroundColor3 = Color3.fromRGB(214, 74, 74), BorderSizePixel = 0, Rotation = 45, ZIndex = 5,
+					}, mapArea)
+					make("UIStroke", { Color = COLORS.Text, Thickness = 1 }, diamond)
+					make("TextLabel", {
+						Size = UDim2.new(0, 118, 0, 12), AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(u, 0, v, -10),
+						BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10,
+						TextColor3 = Color3.fromRGB(235, 150, 150), Text = label, ZIndex = 5,
+					}, mapArea)
+				end
+			end
 		end
 	end
 
