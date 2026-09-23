@@ -278,7 +278,7 @@ local BOSS_TUNING = { RoamRadius = 6, LeashRadius = 34, AggroRadius = 30 } -- bo
 ensureTerritory("wolf_den", "enemy_wolf", 0, 255, 52, 5, 2, 4)             -- Whispering Woods (starter)
 ensureTerritory("goblin_camp", "enemy_goblin", 160, 25, 46, 5, 3, 4)        -- near-town goblins
 ensureTerritory("goblin_ruins", "enemy_goblin", 255, -60, 44, 4, 6, 8)      -- deeper, bolder goblins
-ensureTerritory("hobgoblin_hollow", "enemy_hobgoblin", 0, -360, 48, 4, 6, 10) -- deep Ironrock Hollow (past the mine)
+ensureTerritory("hobgoblin_hollow", "enemy_hobgoblin", 0, -340, 38, 4, 6, 10) -- deep Ironrock Hollow (past the mine; kept clear of the boundary hill)
 ensureTerritory("bandit_camp", "enemy_bandit", -230, 40, 50, 4, 5, 9)        -- Ashen Ruins
 ensureTerritory("warlord_tower", "enemy_bandit_warlord", -270, 0, 8, 1, nil, nil, BOSS_TUNING) -- ruined watchtower boss
 ensureTerritory("chieftain_arena", "enemy_goblin_chieftain", 330, 10, 8, 1, nil, nil, BOSS_TUNING) -- Warren boss
