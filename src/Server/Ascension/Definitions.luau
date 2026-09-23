@@ -24,6 +24,13 @@ export type Requirements = {
 	read OverallSkilling: OverallSkillingRequirement,
 	read BossMilestoneId: string,
 }
+-- The permanent reward for HOLDING a rank (absolute totals for that rank, not stacked on lower ranks).
+-- Folded into the SAME modifier channels armor/Mastery use: MaxHealthBonus raises max health,
+-- IncomingDamageReduction mitigates enemy damage. So Ascending visibly toughens the player.
+export type Perk = {
+	read MaxHealthBonus: number,
+	read IncomingDamageReduction: number,
+}
 export type RankDefinition = {
 	read Id: string,
 	read DisplayName: string,
@@ -31,6 +38,7 @@ export type RankDefinition = {
 	read PreviousRankId: string?,
 	-- nil only for the starting rank; required for every rank reachable through Ascend.
 	read Requirements: Requirements?,
+	read Perk: Perk,
 }
 
 local AscensionDefinitions = {}
@@ -42,6 +50,10 @@ end
 
 local function positiveWhole(value: any): boolean
 	return type(value) == "number" and value > 0 and value % 1 == 0 and value <= 9007199254740991
+end
+
+local function finiteNonNegative(value: any): boolean
+	return type(value) == "number" and value == value and value >= 0 and value < math.huge
 end
 
 local function skillThreshold(skillId: string, level: number): SkillThreshold
@@ -65,12 +77,17 @@ local function requirements(offenseReq: OffensiveRequirement, defenseReq: SkillT
 	})
 end
 
-local function rank(id: string, displayName: string, previousRankId: string?, requirementsData: Requirements?): RankDefinition
+local function perk(maxHealthBonus: number, incomingDamageReduction: number): Perk
+	return table.freeze({ MaxHealthBonus = maxHealthBonus, IncomingDamageReduction = incomingDamageReduction })
+end
+
+local function rank(id: string, displayName: string, previousRankId: string?, requirementsData: Requirements?, perkData: Perk): RankDefinition
 	return table.freeze({
 		Id = id,
 		DisplayName = displayName,
 		PreviousRankId = previousRankId,
 		Requirements = requirementsData,
+		Perk = perkData,
 	})
 end
 
@@ -78,8 +95,10 @@ end
 -- (Offense ~8, Defense ~5). The overall-skilling requirement is the smallest pair that is still a
 -- genuine check rather than the always-true level-1 baseline: level 2 in each of Mining and
 -- Smithing, one step past the slice's own Iron Ore/Iron Bar unlock levels.
+-- Rank perks are absolute totals for holding that rank and rise with it, so each Ascension is a real,
+-- felt power step: Adept toughens you (+8% max health), Vanguard more so and starts mitigating hits.
 local definitions: { [string]: RankDefinition } = {
-	[AscensionIds.Adventurer] = rank(AscensionIds.Adventurer, "Adventurer", nil, nil),
+	[AscensionIds.Adventurer] = rank(AscensionIds.Adventurer, "Adventurer", nil, nil, perk(0, 0)),
 	[AscensionIds.Adept] = rank(
 		AscensionIds.Adept,
 		"Adept",
@@ -89,7 +108,8 @@ local definitions: { [string]: RankDefinition } = {
 			skillThreshold(SkillIds.Defense, 5),
 			overallSkilling({ skillThreshold(SkillIds.Mining, 2), skillThreshold(SkillIds.Smithing, 2) }),
 			ProgressionFlagIds.GoblinChieftainDefeated
-		)
+		),
+		perk(0.08, 0)
 	),
 	-- Vanguard (Ascension II): the mid-game rank gate. Thresholds sit meaningfully above Adept and are
 	-- tuned to the content built for this region — the steel production tier (Mining/Smithing) and the
@@ -104,7 +124,8 @@ local definitions: { [string]: RankDefinition } = {
 			skillThreshold(SkillIds.Defense, 12),
 			overallSkilling({ skillThreshold(SkillIds.Mining, 8), skillThreshold(SkillIds.Smithing, 10) }),
 			ProgressionFlagIds.BanditWarlordDefeated
-		)
+		),
+		perk(0.20, 0.05)
 	),
 }
 
@@ -122,6 +143,10 @@ function AscensionDefinitions.Validate(candidateDefinitions: any): (boolean, str
 		end
 		if type(candidate.DisplayName) ~= "string" or candidate.DisplayName == "" then
 			return false, "Ascension ranks require a display name"
+		end
+		local perkData = candidate.Perk
+		if type(perkData) ~= "table" or not finiteNonNegative(perkData.MaxHealthBonus) or not finiteNonNegative(perkData.IncomingDamageReduction) then
+			return false, "Ascension ranks require a valid perk (non-negative MaxHealthBonus and IncomingDamageReduction)"
 		end
 		if candidate.PreviousRankId ~= nil then
 			if type(candidate.PreviousRankId) ~= "string" or AscensionIds.ById[candidate.PreviousRankId] ~= true or candidate.PreviousRankId == rankId then

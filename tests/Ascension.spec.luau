@@ -317,6 +317,23 @@ test("Vanguard is a stable rank chaining from Adept, gated on the steel tier and
 	equal(r.OverallSkilling.Thresholds[2].Level, 10)
 	-- The end-game boss milestone ties Vanguard to actually defeating the Bandit Warlord.
 	equal(r.BossMilestoneId, ProgressionFlagIds.BanditWarlordDefeated)
+	-- Vanguard grants a real permanent payoff (more max health + starts mitigating hits).
+	equal(vanguard.Perk.MaxHealthBonus, 0.20)
+	equal(vanguard.Perk.IncomingDamageReduction, 0.05)
+end)
+
+test("rank perks are exposed for both the current rank and the next rank", function()
+	local f = fixture()
+	-- Adventurer's perk is the baseline (no bonus).
+	local adventurerPerk = assert(f.Service.GetPerk(7))
+	equal(adventurerPerk.MaxHealthBonus, 0)
+	equal(adventurerPerk.IncomingDamageReduction, 0)
+	-- The next rank carries the perk Ascending to it would grant, so the client can show the payoff.
+	equal(assert(f.Service.EvaluateNextRank(7)).Perk.MaxHealthBonus, 0.08)
+	-- As an Adept, GetPerk returns Adept's perk and the next rank's perk is Vanguard's.
+	f.Records[7].Ascension.RankId = AscensionIds.Adept
+	equal(assert(f.Service.GetPerk(7)).MaxHealthBonus, 0.08)
+	equal(assert(f.Service.EvaluateNextRank(7)).Perk.MaxHealthBonus, 0.20)
 end)
 
 test("GetState surfaces the current rank's display name", function()

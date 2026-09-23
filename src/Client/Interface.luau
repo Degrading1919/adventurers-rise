@@ -685,6 +685,33 @@ function Interface.New(player: Player)
 		}, ascendList)
 	end
 
+	-- Formats an Ascension perk (a rank's permanent reward) into a short readable string, or nil if it
+	-- grants nothing measurable.
+	local function perkText(perkValue: any): string?
+		if type(perkValue) ~= "table" then
+			return nil
+		end
+		local parts = {}
+		local hp = tonumber(perkValue.MaxHealthBonus) or 0
+		local dr = tonumber(perkValue.IncomingDamageReduction) or 0
+		if hp > 0 then
+			table.insert(parts, ("+%d%% Max HP"):format(math.floor(hp * 100 + 0.5)))
+		end
+		if dr > 0 then
+			table.insert(parts, ("+%d%% damage reduction"):format(math.floor(dr * 100 + 0.5)))
+		end
+		if #parts == 0 then
+			return nil
+		end
+		return table.concat(parts, ", ")
+	end
+	local function ascendInfo(text: string, color: Color3, order2: number)
+		make("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 13,
+			TextColor3 = color, TextXAlignment = Enum.TextXAlignment.Left, Text = text, LayoutOrder = order2,
+		}, ascendList)
+	end
+
 	local function renderAscend()
 		for _, child in ascendList:GetChildren() do
 			if child:IsA("TextLabel") then child:Destroy() end
@@ -695,6 +722,11 @@ function Interface.New(player: Player)
 			local p = if type(nextRank) == "table" then nextRank.Progress else nil
 		local order2 = 0
 		if p then
+			ascendInfo(("%s  ▶  %s"):format(tostring(asc.RankDisplayName or "—"), tostring(nextRank.DisplayName)), COLORS.Text, order2); order2 += 1
+			local grantText = perkText(nextRank.Perk)
+			if grantText then
+				ascendInfo("Ascending grants: " .. grantText, COLORS.Good, order2); order2 += 1
+			end
 			for _, alt in p.Offense.Alternatives do
 				reqLine(("Offense: %s %d/%d"):format(SKILL_LABELS[alt.SkillId] or alt.SkillId, alt.CurrentLevel, alt.RequiredLevel), alt.Met, order2)
 				order2 += 1
@@ -705,6 +737,14 @@ function Interface.New(player: Player)
 				order2 += 1
 			end
 			reqLine(MILESTONE_LABELS[p.BossMilestone.MilestoneId] or "Boss milestone", p.BossMilestone.Met, order2); order2 += 1
+		end
+		if not p then
+			-- Top of the ladder: no next rank -- show the rank held and the perk it grants.
+			ascendInfo(("Highest rank: %s"):format(tostring(asc.RankDisplayName or "—")), COLORS.Text, order2); order2 += 1
+			local held = perkText(asc.RankPerk)
+			if held then
+				ascendInfo("Rank perk: " .. held, COLORS.Good, order2); order2 += 1
+			end
 		end
 		ascendTargetRankId = if type(nextRank) == "table" then nextRank.RankId else nil
 		local canAscend = p ~= nil and p.Met == true

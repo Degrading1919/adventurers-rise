@@ -51,6 +51,8 @@ export type NextRankView = {
 	RankId: string,
 	DisplayName: string,
 	Progress: RequirementEvaluation,
+	-- What Ascending to this rank permanently grants, so the client can show the payoff up front.
+	Perk: Definitions.Perk,
 }
 
 -- Trusted server systems (a shared or personal boss encounter) call RecordBossMilestone /
@@ -232,7 +234,28 @@ function Service.New(playerData: PlayerData, skills: Skills)
 		if not progress then
 			return nil, progressReason
 		end
-		return { RankId = nextRank.Id, DisplayName = nextRank.DisplayName, Progress = progress }, nil
+		return { RankId = nextRank.Id, DisplayName = nextRank.DisplayName, Progress = progress, Perk = nextRank.Perk }, nil
+	end
+
+	-- The permanent perk the player's CURRENT rank grants (the reward they already hold). Read by the
+	-- composition so it can fold the perk into the live health/damage-reduction modifier channels.
+	function service.GetPerkFromData(data: any): (Definitions.Perk?, string?)
+		local ascension, ascensionReason = ascensionFor(data)
+		if not ascension then
+			return nil, ascensionReason
+		end
+		return Definitions.ById[ascension.RankId].Perk, nil
+	end
+
+	function service.GetPerk(userId: number): (Definitions.Perk?, string?)
+		if not validUserId(userId) then
+			return nil, "InvalidUserId"
+		end
+		local data = playerData.GetSnapshot(userId)
+		if not data then
+			return nil, "NotReady"
+		end
+		return service.GetPerkFromData(data)
 	end
 
 	function service.EvaluateNextRank(userId: number): (NextRankView?, string?)

@@ -201,6 +201,9 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local equipment = EquipmentService.New(playerData)
 	local economy = EconomyService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
 	local mastery = MasteryService.New(playerData, skills, economy)
+	-- Forward-declared here so the defense-modifier provider below can fold in the player's current
+	-- Ascension rank perk; the real service is constructed in dependency order further down.
+	local ascension: any = nil
 
 	-- Mastery.GetModifiers stays the single source of truth for selected-node effects; these thin
 	-- adapters hand each consuming system only the totals for the one skill it applies, defaulting to an
@@ -242,6 +245,20 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			local existing = totals.IncomingDamageReduction
 			totals.IncomingDamageReduction = (if type(existing) == "number" then existing else 0) + armorReduction
 		end
+		-- Current Ascension rank perk: fold its permanent MaxHealthBonus + IncomingDamageReduction into the
+		-- same channels, so Ascending immediately toughens the player (more max health, less damage taken)
+		-- with NO change to PlayerHealth/EnemyCombat -- the rank is just more of the same bonuses.
+		local perk = if ascension then ascension.GetPerk(userId) else nil
+		if type(perk) == "table" then
+			if type(perk.MaxHealthBonus) == "number" and perk.MaxHealthBonus ~= 0 then
+				local existing = totals.MaxHealthBonus
+				totals.MaxHealthBonus = (if type(existing) == "number" then existing else 0) + perk.MaxHealthBonus
+			end
+			if type(perk.IncomingDamageReduction) == "number" and perk.IncomingDamageReduction ~= 0 then
+				local existing = totals.IncomingDamageReduction
+				totals.IncomingDamageReduction = (if type(existing) == "number" then existing else 0) + perk.IncomingDamageReduction
+			end
+		end
 		return totals
 	end
 	-- Read-only, presentation-facing view of the SAME mitigation EnemyCombat applies (Defense Mastery +
@@ -271,7 +288,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock, meleeModifiers)
 	local gathering = GatheringService.New(playerData, equipment, inventory, skills, worldAdapters.GatheringNodeResolver, miningModifiers)
 	local crafting = CraftingService.New(playerData, inventory, skills, smithingModifiersFromData)
-	local ascension = AscensionService.New(playerData, skills)
+	ascension = AscensionService.New(playerData, skills)
 	local bosses = BossesService.New(playerData, enemies, economy, inventory, ascension, { Roll01 = runtime.Roll01 })
 	-- OfflineTraining compares its elapsed window against PlayerData's persisted LastSessionAt
 	-- (stamped from wall/epoch time by Store), so it must be constructed with the wall clock

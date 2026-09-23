@@ -25,6 +25,8 @@ export type Ascension = {
 	read GetState: (number) -> (any?, string?),
 	-- Progress toward the player's NEXT rank; returns (nil, nil) at the top of the ladder.
 	read EvaluateNextRank: (number) -> (any?, string?),
+	-- The permanent perk the player's current rank grants (so the Ascend panel can show it).
+	read GetPerk: (number) -> (any?, string?),
 }
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
 export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
@@ -132,6 +134,11 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 		if nextRankReason then
 			return nil, nextRankReason
 		end
+		-- The perk the current rank already grants, so the Ascend panel shows what the player holds now.
+		local rankPerk, rankPerkReason = services.Ascension.GetPerk(userId)
+		if not rankPerk then
+			return nil, rankPerkReason
+		end
 
 		-- OfflineTraining.GetFocus returns (nil, nil) -- not an error -- when no focus is selected.
 		local focusSkillId, focusReason = services.OfflineTraining.GetFocus(userId)
@@ -232,7 +239,9 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			Ascension = {
 				RankId = (ascensionState :: any).RankId,
 				RankDisplayName = (ascensionState :: any).DisplayName,
-				-- The next rank + its live 4-category requirement progress, or nil at max rank.
+				-- The perk the current rank grants now, and the next rank + its live requirement progress
+				-- (which itself carries the perk that Ascending would grant). NextRank is nil at max rank.
+				RankPerk = rankPerk,
 				NextRank = nextRank,
 			},
 			Health = health,

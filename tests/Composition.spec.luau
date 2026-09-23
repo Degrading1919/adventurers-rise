@@ -1374,8 +1374,17 @@ test("Ascension: Ascend fails until requirements are met, then succeeds", functi
 		data.ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated] = true
 	end))
 	f.Advance(1)
+	-- Before ascending, the Adventurer holds no rank perk: base max health.
+	equal(assert(request(f, 7, RequestIds.StateGet, nil).Result).Health.MaxHealth, 100)
+	f.Advance(1)
 	local ok = request(f, 7, RequestIds.AscensionAscend, { RankId = AscensionIds.Adept })
 	assert(ok.Ok, ok.Reason)
+	-- Ascending to Adept grants a visible payoff: +8% max health, folded into PlayerHealth via the rank
+	-- perk (floor(100 * 1.08 + 0.5) = 108), and the current-rank perk is surfaced for the Ascend panel.
+	f.Advance(1)
+	local afterState = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	equal(afterState.Health.MaxHealth, 108)
+	equal(afterState.Ascension.RankPerk.MaxHealthBonus, 0.08)
 end)
 
 -- ===== State read model =====
@@ -1392,6 +1401,7 @@ test("the state read model contains the intended player-facing data and omits in
 	assert(state.Mastery[SkillIds.Melee] ~= nil)
 	assert(state.Ascension.RankId ~= nil)
 	assert(state.Ascension.RankDisplayName ~= nil)
+	assert(state.Ascension.RankPerk ~= nil) -- the perk the current rank grants (for the Ascend panel)
 	-- A fresh Adventurer's next rank is Adept, with its live 4-category requirement progress.
 	assert(state.Ascension.NextRank ~= nil and state.Ascension.NextRank.RankId == AscensionIds.Adept)
 	assert(state.Ascension.NextRank.Progress ~= nil and state.Ascension.NextRank.Progress.RankId == AscensionIds.Adept)
