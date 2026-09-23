@@ -36,6 +36,7 @@ local ITEM_LABELS: { [string]: string } = {
 	armor_iron_legs = "Iron Greaves",
 	item_coal = "Coal",
 	item_steel_bar = "Steel Bar",
+	item_raw_gem = "Raw Gem",
 	weapon_sword_steel = "Steel Sword",
 	armor_steel_helm = "Steel Helm",
 	armor_steel_body = "Steel Chestplate",

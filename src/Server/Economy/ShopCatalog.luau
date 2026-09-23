@@ -26,6 +26,9 @@ local hubEntries: { [string]: Entry } = {
 	item_iron_ore = entry("item_iron_ore", 10, 4),
 	item_iron_bar = entry("item_iron_bar", nil, 12),
 	weapon_sword_upgraded = entry("weapon_sword_upgraded", 500, 50),
+	-- Raw gems (Prospecting byproduct) are sell-only: a solid Gold return so Prospecting pays off,
+	-- but not buyable, so they can't be farmed into a Gold loop.
+	item_raw_gem = entry("item_raw_gem", nil, 18),
 }
 local hubCatalog: Catalog = table.freeze({
 	Id = "shop_hub",

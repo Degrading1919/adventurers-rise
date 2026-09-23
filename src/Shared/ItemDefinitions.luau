@@ -75,6 +75,9 @@ local definitions: { [string]: Definition } = {
 	-- Iron Bar to smelt a Steel Bar, the tier-2 crafting material behind the steel weapon+armour tier.
 	item_coal = definition("item_coal", "Stackable"),
 	item_steel_bar = definition("item_steel_bar", "Stackable"),
+	-- Raw gem: the rare byproduct of mining with the Mining "Prospecting" mastery. Sold to the shop for
+	-- Gold, so Prospecting is a distinct payoff (Gold) versus Extraction (more ore for crafting).
+	item_raw_gem = definition("item_raw_gem", "Stackable"),
 	weapon_sword_starter = definition("weapon_sword_starter", "Discrete", equipment(EquipmentSlots.Weapon, 1), melee(10, 1, 8)),
 	weapon_sword_upgraded = definition("weapon_sword_upgraded", "Discrete", equipment(EquipmentSlots.Weapon, 2), melee(15, 0.8, 9)),
 	-- Tier-2 steel sword: the top of the current weapon ladder (starter -> upgraded iron -> steel).

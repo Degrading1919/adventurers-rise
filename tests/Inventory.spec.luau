@@ -81,6 +81,7 @@ test("definitions contain only the required classified slice items", function()
 		armor_iron_legs = "Discrete",
 		item_coal = "Stackable",
 		item_steel_bar = "Stackable",
+		item_raw_gem = "Stackable",
 		weapon_sword_steel = "Discrete",
 		armor_steel_helm = "Discrete",
 		armor_steel_body = "Discrete",
@@ -92,7 +93,7 @@ test("definitions contain only the required classified slice items", function()
 		equal(definition.Kind, expected[id])
 		count += 1
 	end
-	equal(count, 17)
+	equal(count, 18)
 	equal(ItemDefinitions.ById[StarterSword].Equipment.SlotId, EquipmentSlots.Weapon)
 	equal(ItemDefinitions.ById[BasicPickaxe].Equipment.SlotId, EquipmentSlots.Tool)
 	equal(ItemDefinitions.ById.armor_iron_helm.Equipment.SlotId, EquipmentSlots.Head)

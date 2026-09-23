@@ -177,7 +177,7 @@ local miningProspecting = branch(
 	"Prospecting",
 	"Keen Eye",
 	"RareResourceBonus",
-	function(p) return "+" .. p .. " rare-resource find chance (reserved for future rare Mining resources)." end,
+	function(p) return "Mine raw gems as a rare byproduct (yield scales with mining, up to " .. p .. ")." end,
 	MasteryIds.Nodes.MiningProspecting
 )
 
