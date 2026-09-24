@@ -209,7 +209,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- "Personally forged goods" (docs/MASTERY_TREES.md, Merchant Smith) == the outputs of Smithing
 	-- recipes: bars + forged equipment. Raw mined resources (ore, coal, gems) are NOT forged, so the
 	-- sale bonus never applies to them -- it stays an economic specialisation of Smithing, not a generic
-	-- resource-sale buff.
+	-- resource-sale buff. Scoping is by item TYPE (any forgeable output id), not per-instance provenance:
+	-- we do not track whether this exact stack was forged by this player. That is a deliberate, safe
+	-- reading -- the bonus is not stat-affecting, and shop buy price > sell price so there is no
+	-- buy-a-bar-then-resell arbitrage to exploit.
 	local forgedGoodIds: { [string]: boolean } = {}
 	for _, recipe in CraftingDefinitions.ById do
 		forgedGoodIds[recipe.OutputItemId] = true

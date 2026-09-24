@@ -183,9 +183,11 @@ function Service.New(equipment: Equipment, skills: Skills, resolveTarget: Target
 
 		nextAttackAt[userId] = now + effectiveInterval
 
-		-- Melee "Cleave" mastery: splash a fraction of the primary hit's damage to nearby enemies. Pure
-		-- crowd control and best-effort -- secondary hits never affect the primary result, cooldown, XP,
-		-- or Gold (cleaved kills bypass the reward path), and any secondary failure is ignored.
+		-- Melee "Cleave" mastery: splash a fraction of the primary hit's damage to nearby enemies. Best-effort
+		-- and decoupled -- secondary hits never affect the primary result, cooldown, or XP, and any secondary
+		-- failure is ignored. Cleaved-enemy ids are collected in CleaveTargetIds so the reward coordinator can
+		-- pay each resulting NORMAL-enemy death its Gold exactly once (group farming); bosses are excluded as
+		-- cleave targets upstream (Enemies.CreateCleaveResolver), so no boss/participation path is ever touched.
 		local cleaveHits = 0
 		local cleaveTargetIds: { string } = {}
 		local cleaveBonus = math.max(0, modifierTotal(meleeModifierTotals, "MeleeCleaveDamageBonus"))

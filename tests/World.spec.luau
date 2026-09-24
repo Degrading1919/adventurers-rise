@@ -108,7 +108,10 @@ Vector3 = {
 }
 Color3 = { fromRGB = function() return {} end }
 UDim2 = { new = function() return {} end }
-Enum = { Material = { SmoothPlastic = {} } }
+Enum = { Material = { SmoothPlastic = {}, Water = {} }, RaycastFilterType = { Include = "Include" } }
+-- Terrain-follow ray config is built at construction (New); the ray itself (sampleGroundY) only runs
+-- under a live Heartbeat, so a settable RaycastParams stand-in is all the headless path needs.
+RaycastParams = { new = function() return {} end }
 
 local cframeMeta = { __add = function(a, _) return a end }
 local function makeCFrame(): any

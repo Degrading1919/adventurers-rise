@@ -187,7 +187,7 @@ local smithingSmelter = branch(
 	"Smelter",
 	"Efficient Smelting",
 	"ProcessingEfficiencyBonus",
-	function(p) return "-" .. p .. " ore used when smelting ore into bars." end,
+	function(p) return "-" .. p .. " materials used when smelting bars (ore and coal)." end,
 	MasteryIds.Nodes.SmithingSmelter
 )
 local smithingForgemaster = branch(
