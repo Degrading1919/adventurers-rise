@@ -45,10 +45,14 @@ local function modifierTotal(totals: any, key: string): number
 	return value
 end
 
-function Service.New(configuration: Configuration, defenseModifiers: DefenseModifierProvider?)
+function Service.New(configuration: Configuration, defenseModifiers: DefenseModifierProvider?, clock: (() -> number)?)
 	assert(type(configuration) == "table" and finitePositive(configuration.MaxHealth), "PlayerHealth requires a positive MaxHealth")
 	assert(defenseModifiers == nil or type(defenseModifiers) == "function", "PlayerHealth defenseModifiers must be a function when provided")
+	assert(clock == nil or type(clock) == "function", "PlayerHealth clock must be a function when provided")
 	local baseMaxHealth = configuration.MaxHealth
+	-- Monotonic clock for the out-of-combat regen gate (Resilience). Defaults to os.clock so callers/tests
+	-- that don't wire a clock still work; Composition injects the shared runtime clock.
+	local resolveClock: () -> number = clock or os.clock
 	-- Defaults to "no selected Mastery" so callers/tests that do not wire Mastery keep the fixed base
 	-- max health exactly. Composition injects the real server-authoritative Defense provider.
 	local resolveDefenseModifiers: DefenseModifierProvider = defenseModifiers or function()
@@ -70,6 +74,12 @@ function Service.New(configuration: Configuration, defenseModifiers: DefenseModi
 	-- userId -> current health. A missing entry means "not yet damaged this life" and reads as full,
 	-- so a freshly spawned player is always at maximum without needing an explicit initialisation call.
 	local health: { [number]: number } = {}
+	-- userId -> clock time of the most recent damage, for the Resilience out-of-combat regen gate. A
+	-- missing entry means "not damaged recently", which regen treats as out of combat.
+	local lastDamageAt: { [number]: number } = {}
+	-- Regen only resumes this many seconds after the last hit, so Resilience is genuine out-of-combat
+	-- recovery (docs/MASTERY_TREES.md), never in-combat sustain.
+	local OUT_OF_COMBAT_SECONDS = 5
 	local service = {}
 
 	-- Reads current health, clamped down to the player's current maximum so a Mastery respec that lowers
@@ -100,6 +110,7 @@ function Service.New(configuration: Configuration, defenseModifiers: DefenseModi
 
 	function service.Clear(userId: number)
 		health[userId] = nil
+		lastDamageAt[userId] = nil
 	end
 
 	function service.GetState(userId: number): (State?, string?)
@@ -135,7 +146,41 @@ function Service.New(configuration: Configuration, defenseModifiers: DefenseModi
 			current = 0
 		end
 		health[userId] = current
+		-- Stamp the hit so Resilience regen stays suppressed until the player has been out of combat.
+		lastDamageAt[userId] = resolveClock()
 		return { Health = current, MaxHealth = resolveMaxHealth(userId), AppliedDamage = applied, Died = current <= 0 }, nil
+	end
+
+	-- Defense "Resilience" mastery (RecoveryBonus) regenerates a below-max, living player's health OUT OF
+	-- COMBAT; World ticks this on its shared heartbeat. It is genuine out-of-combat recovery (docs
+	-- MASTERY_TREES) -- suppressed for OUT_OF_COMBAT_SECONDS after any hit, never in-combat sustain. No
+	-- RecoveryBonus == no regen, so baseline players (and all existing tests) are unchanged. The heal rate
+	-- scales with the player's own maximum health, so it stays proportional as they toughen.
+	local REGEN_MAXHEALTH_FRACTION_PER_SECOND = 0.5
+	function service.Regenerate(userId: number, deltaSeconds: number): ()
+		if not validUserId(userId) or not finitePositive(deltaSeconds) then
+			return
+		end
+		local recovery = math.max(0, modifierTotal(resolveDefenseModifiers(userId), "RecoveryBonus"))
+		if recovery <= 0 then
+			return
+		end
+		-- Out-of-combat gate: no regen until enough time has passed since the last damage taken.
+		local since = lastDamageAt[userId]
+		if since ~= nil and (resolveClock() - since) < OUT_OF_COMBAT_SECONDS then
+			return
+		end
+		local max = resolveMaxHealth(userId)
+		local current = currentHealth(userId)
+		-- Dead players don't self-heal; full players need nothing.
+		if current <= 0 or current >= max then
+			return
+		end
+		local healed = current + max * recovery * REGEN_MAXHEALTH_FRACTION_PER_SECOND * deltaSeconds
+		if healed > max then
+			healed = max
+		end
+		health[userId] = healed
 	end
 
 	return table.freeze(service)

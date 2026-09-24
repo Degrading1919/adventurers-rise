@@ -2,7 +2,6 @@
 
 local Shared = game:GetService("ReplicatedStorage").Shared
 local SkillIds = require(Shared.SkillIds)
-local AscensionIds = require(Shared.AscensionIds)
 local StationDefinitions = require(script.Parent.Parent.Plots.StationDefinitions)
 local ShopCatalog = require(script.Parent.Parent.Economy.ShopCatalog)
 local CraftingDefinitions = require(script.Parent.Parent.Crafting.Definitions)
@@ -24,11 +23,19 @@ export type Plots = { read GetStation: (number, string) -> (any?, string?) }
 export type Mastery = { read GetState: (number, string) -> (any?, string?) }
 export type Ascension = {
 	read GetState: (number) -> (any?, string?),
-	read EvaluateRequirements: (number, string) -> (any?, string?),
+	-- Progress toward the player's NEXT rank; returns (nil, nil) at the top of the ladder.
+	read EvaluateNextRank: (number) -> (any?, string?),
+	-- The permanent perk the player's current rank grants (so the Ascend panel can show it).
+	read GetPerk: (number) -> (any?, string?),
 }
 export type OfflineTraining = { read GetFocus: (number) -> (string?, string?) }
 export type PlayerHealth = { read GetState: (number) -> (any?, string?) }
 export type Onboarding = { read GetView: (number) -> (any?, string?) }
+-- The set of zone ids the player has discovered so far, for the map (discovered vs unknown).
+export type Discovery = { read GetDiscovered: (number) -> (any?, string?) }
+-- The effective incoming-damage mitigation EnemyCombat applies (Defense Mastery + equipped armour),
+-- plus the equipped-armour-only portion, as a read-only presentation figure. Cannot fail.
+export type DefenseSummary = (number) -> { Total: number, Armor: number }
 
 export type Services = {
 	Economy: Economy,
@@ -41,6 +48,8 @@ export type Services = {
 	OfflineTraining: OfflineTraining,
 	PlayerHealth: PlayerHealth,
 	Onboarding: Onboarding,
+	DefenseSummary: DefenseSummary,
+	Discovery: Discovery,
 }
 
 local SLICE_SKILL_IDS = { SkillIds.Melee, SkillIds.Defense, SkillIds.Mining, SkillIds.Smithing }
@@ -119,9 +128,16 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 		if not ascensionState then
 			return nil, ascensionReason
 		end
-		local adeptProgress, progressReason = services.Ascension.EvaluateRequirements(userId, AscensionIds.Adept)
-		if not adeptProgress then
-			return nil, progressReason
+		-- Forward-looking Ascension goal: progress toward the NEXT rank in the chain, or nil once the
+		-- player is at the top. (nil, nil) is the top-of-ladder signal, not an error.
+		local nextRank, nextRankReason = services.Ascension.EvaluateNextRank(userId)
+		if nextRankReason then
+			return nil, nextRankReason
+		end
+		-- The perk the current rank already grants, so the Ascend panel shows what the player holds now.
+		local rankPerk, rankPerkReason = services.Ascension.GetPerk(userId)
+		if not rankPerk then
+			return nil, rankPerkReason
 		end
 
 		-- OfflineTraining.GetFocus returns (nil, nil) -- not an error -- when no focus is selected.
@@ -133,6 +149,18 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 		local health, healthReason = services.PlayerHealth.GetState(userId)
 		if not health then
 			return nil, healthReason
+		end
+
+		-- Read-only mitigation figures so the client can make the Defense/armour reward legible: Total is
+		-- what EnemyCombat actually applies (Mastery + armour, clamped); ArmorDamageReduction is the
+		-- equipped-gear-only share. Both are fractions in [0, ceiling]; presentation only.
+		local defense = services.DefenseSummary(userId)
+
+		-- The zones this player has discovered, for the map (discovered vs unknown) and any UI that wants
+		-- to reflect exploration progress. A set { [zoneId] = true }; presentation only.
+		local discovered, discoveredReason = services.Discovery.GetDiscovered(userId)
+		if not discovered then
+			return nil, discoveredReason
 		end
 
 		-- Sanitized onboarding view: the current guided step (title/hint/progress/target) or a completion
@@ -210,9 +238,15 @@ function Service.New(services: Services, offlineReturnSummaries: { [number]: any
 			Mastery = mastery,
 			Ascension = {
 				RankId = (ascensionState :: any).RankId,
-				AdeptProgress = adeptProgress,
+				RankDisplayName = (ascensionState :: any).DisplayName,
+				-- The perk the current rank grants now, and the next rank + its live requirement progress
+				-- (which itself carries the perk that Ascending would grant). NextRank is nil at max rank.
+				RankPerk = rankPerk,
+				NextRank = nextRank,
 			},
 			Health = health,
+			Defense = { DamageReduction = defense.Total, ArmorDamageReduction = defense.Armor },
+			Discovery = { DiscoveredZoneIds = discovered },
 			Shop = shop,
 			Recipes = recipes,
 			GatheringNodes = gatheringNodes,

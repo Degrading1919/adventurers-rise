@@ -15,12 +15,14 @@ local EnemiesService = require(script.Parent.Parent.Enemies.Service)
 local CombatService = require(script.Parent.Parent.Combat.Service)
 local GatheringService = require(script.Parent.Parent.Gathering.Service)
 local CraftingService = require(script.Parent.Parent.Crafting.Service)
+local CraftingDefinitions = require(script.Parent.Parent.Crafting.Definitions)
 local BossesService = require(script.Parent.Parent.Bosses.Service)
 local AscensionService = require(script.Parent.Parent.Ascension.Service)
 local MasteryService = require(script.Parent.Parent.Mastery.Service)
 local OfflineTrainingService = require(script.Parent.Parent.OfflineTraining.Service)
 local PlayerHealthService = require(script.Parent.Parent.PlayerHealth.Service)
 local OnboardingService = require(script.Parent.Parent.Onboarding.Service)
+local DiscoveryService = require(script.Parent.Parent.Discovery.Service)
 
 local RequestIds = require(game:GetService("ReplicatedStorage").Shared.RequestIds)
 local GatheringSessions = require(script.Parent.GatheringSessions)
@@ -31,6 +33,7 @@ local PlayerEvents = require(script.Parent.PlayerEvents)
 local ReadModel = require(script.Parent.ReadModel)
 local SkillIds = require(game:GetService("ReplicatedStorage").Shared.SkillIds)
 local EventIds = require(game:GetService("ReplicatedStorage").Shared.EventIds)
+local ItemDefinitions = require(game:GetService("ReplicatedStorage").Shared.ItemDefinitions)
 
 export type PlayerData = {
 	read GetSnapshot: (number) -> any?,
@@ -67,6 +70,8 @@ export type WorldAdapters = {
 	read StationDistanceProvider: (number, string) -> (number?, string?),
 	read ForgeDistanceProvider: (number) -> (number?, string?),
 	read ShopDistanceProvider: (number, string) -> (number?, string?),
+	read PlayerZoneResolver: (number) -> (string?, string?),
+	read CleaveTargetsProvider: (string) -> ({ string }?, string?),
 }
 export type RequestResult = {
 	Ok: boolean,
@@ -143,7 +148,9 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 			and type(worldAdapters.GatheringNodeResolver) == "function"
 			and type(worldAdapters.StationDistanceProvider) == "function"
 			and type(worldAdapters.ForgeDistanceProvider) == "function"
-			and type(worldAdapters.ShopDistanceProvider) == "function",
+			and type(worldAdapters.ShopDistanceProvider) == "function"
+			and type(worldAdapters.PlayerZoneResolver) == "function"
+			and type(worldAdapters.CleaveTargetsProvider) == "function",
 		"Composition requires injected world adapters"
 	)
 
@@ -195,8 +202,36 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local skills = SkillsService.New(playerData, { Curves = SkillCurves })
 	local inventory = InventoryService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
 	local equipment = EquipmentService.New(playerData)
-	local economy = EconomyService.New(playerData, { NewInstanceId = runtime.NewInstanceId })
-	local mastery = MasteryService.New(playerData, skills, economy)
+	-- Forward-declared so Economy's sale-value bonus can read the player's Smithing "Merchant Smith"
+	-- mastery, even though Mastery is constructed just after Economy (Mastery depends on Economy). The
+	-- closure below is only invoked at sell time, by which point `mastery` is assigned.
+	local mastery: any = nil
+	-- "Personally forged goods" (docs/MASTERY_TREES.md, Merchant Smith) == the outputs of Smithing
+	-- recipes: bars + forged equipment. Raw mined resources (ore, coal, gems) are NOT forged, so the
+	-- sale bonus never applies to them -- it stays an economic specialisation of Smithing, not a generic
+	-- resource-sale buff. Scoping is by item TYPE (any forgeable output id), not per-instance provenance:
+	-- we do not track whether this exact stack was forged by this player. That is a deliberate, safe
+	-- reading -- the bonus is not stat-affecting, and shop buy price > sell price so there is no
+	-- buy-a-bar-then-resell arbitrage to exploit.
+	local forgedGoodIds: { [string]: boolean } = {}
+	for _, recipe in CraftingDefinitions.ById do
+		forgedGoodIds[recipe.OutputItemId] = true
+	end
+	local economy = EconomyService.New(playerData, {
+		NewInstanceId = runtime.NewInstanceId,
+		SaleValueBonusFromData = function(data: any, definitionId: string): number
+			if not forgedGoodIds[definitionId] then
+				return 0
+			end
+			local totals = if mastery then mastery.GetModifiersFromData(data, SkillIds.Smithing) else nil
+			local bonus = if type(totals) == "table" then totals.CraftedSaleValueBonus else nil
+			return if type(bonus) == "number" then bonus else 0
+		end,
+	})
+	mastery = MasteryService.New(playerData, skills, economy)
+	-- Forward-declared here so the defense-modifier provider below can fold in the player's current
+	-- Ascension rank perk; the real service is constructed in dependency order further down.
+	local ascension: any = nil
 
 	-- Mastery.GetModifiers stays the single source of truth for selected-node effects; these thin
 	-- adapters hand each consuming system only the totals for the one skill it applies, defaulting to an
@@ -209,8 +244,61 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local function meleeModifiers(userId: number): { [string]: number }
 		return modifiersForSkill(userId, SkillIds.Melee)
 	end
+	-- Sum the incoming-damage mitigation of this player's currently-equipped armour pieces (Head/Body/
+	-- Legs). Read from the same authoritative equipment snapshot the equip flow writes; unknown or
+	-- non-armour items contribute nothing. This is server-derived, never client-supplied.
+	local function equippedArmorReduction(userId: number): number
+		local snapshot = equipment.GetSnapshot(userId)
+		if type(snapshot) ~= "table" then
+			return 0
+		end
+		local total = 0
+		for _, equippedItem in snapshot do
+			local itemDefinition = ItemDefinitions.ById[equippedItem.DefinitionId]
+			if itemDefinition and itemDefinition.Armor then
+				total += itemDefinition.Armor.DamageReduction
+			end
+		end
+		return total
+	end
+	-- Defense Mastery totals PLUS equipped-armour mitigation, composed into the single
+	-- IncomingDamageReduction channel EnemyCombat already reads and clamps. Folding armour here (rather
+	-- than in EnemyCombat) keeps EnemyCombat/PlayerHealth unchanged: armour is just more of the same
+	-- reduction the Defense tree already contributes. A cloned table is returned so we never mutate
+	-- Mastery's cached totals; MaxHealthBonus (read by PlayerHealth) is passed through untouched.
 	local function defenseModifiers(userId: number): { [string]: number }
-		return modifiersForSkill(userId, SkillIds.Defense)
+		local totals = table.clone(modifiersForSkill(userId, SkillIds.Defense))
+		local armorReduction = equippedArmorReduction(userId)
+		if armorReduction ~= 0 then
+			local existing = totals.IncomingDamageReduction
+			totals.IncomingDamageReduction = (if type(existing) == "number" then existing else 0) + armorReduction
+		end
+		-- Current Ascension rank perk: fold its permanent MaxHealthBonus + IncomingDamageReduction into the
+		-- same channels, so Ascending immediately toughens the player (more max health, less damage taken)
+		-- with NO change to PlayerHealth/EnemyCombat -- the rank is just more of the same bonuses.
+		local perk = if ascension then ascension.GetPerk(userId) else nil
+		if type(perk) == "table" then
+			if type(perk.MaxHealthBonus) == "number" and perk.MaxHealthBonus ~= 0 then
+				local existing = totals.MaxHealthBonus
+				totals.MaxHealthBonus = (if type(existing) == "number" then existing else 0) + perk.MaxHealthBonus
+			end
+			if type(perk.IncomingDamageReduction) == "number" and perk.IncomingDamageReduction ~= 0 then
+				local existing = totals.IncomingDamageReduction
+				totals.IncomingDamageReduction = (if type(existing) == "number" then existing else 0) + perk.IncomingDamageReduction
+			end
+		end
+		return totals
+	end
+	-- Read-only, presentation-facing view of the SAME mitigation EnemyCombat applies (Defense Mastery +
+	-- equipped armour), so the client can show the player how much damage their Defense/gear actually
+	-- reduces. Total is clamped to the exact ceiling EnemyCombat uses; Armor is the equipped-gear-only
+	-- portion so the Gear panel can attribute the reward to the armour they crafted. Derived server-side.
+	local function defenseSummary(userId: number): { Total: number, Armor: number }
+		local raw = defenseModifiers(userId).IncomingDamageReduction
+		-- Clamp to EnemyCombat's own exported ceiling, so this display value is the SAME bound combat
+		-- applies with no duplicated literal to drift out of sync.
+		local total = math.clamp(if type(raw) == "number" then math.max(0, raw) else 0, 0, EnemyCombat.MaxIncomingDamageReduction)
+		return { Total = total, Armor = equippedArmorReduction(userId) }
 	end
 	local function miningModifiers(userId: number): { [string]: number }
 		return modifiersForSkill(userId, SkillIds.Mining)
@@ -225,10 +313,13 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	local plots = PlotsService.New(playerData, skills)
 	local enemies = EnemiesService.New({ NewRuntimeId = runtime.NewRuntimeId, RollInteger = runtime.RollInteger })
 	local combatTargetResolver = enemies.CreateCombatTargetResolver(worldAdapters.CombatDistanceProvider)
-	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock, meleeModifiers)
+	-- Melee "Cleave" mastery: a resolver that turns "enemies physically near the primary target" (a world
+	-- query) into secondary damage targets, so Combat can splash without knowing the physical scene.
+	local cleaveResolver = enemies.CreateCleaveResolver(worldAdapters.CleaveTargetsProvider)
+	local combat = CombatService.New(equipment, skills, combatTargetResolver, { MeleeXPPerSuccessfulHit = MELEE_XP_PER_SUCCESSFUL_HIT }, runtime.Clock, meleeModifiers, cleaveResolver)
 	local gathering = GatheringService.New(playerData, equipment, inventory, skills, worldAdapters.GatheringNodeResolver, miningModifiers)
 	local crafting = CraftingService.New(playerData, inventory, skills, smithingModifiersFromData)
-	local ascension = AscensionService.New(playerData, skills)
+	ascension = AscensionService.New(playerData, skills)
 	local bosses = BossesService.New(playerData, enemies, economy, inventory, ascension, { Roll01 = runtime.Roll01 })
 	-- OfflineTraining compares its elapsed window against PlayerData's persisted LastSessionAt
 	-- (stamped from wall/epoch time by Store), so it must be constructed with the wall clock
@@ -240,7 +331,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- Defense Mastery raises this player's maximum health (MaxHealthBonus) and reduces incoming enemy
 	-- damage (IncomingDamageReduction); both are read live from the injected provider so a selection or
 	-- respec takes effect immediately.
-	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH }, defenseModifiers)
+	local playerHealth = PlayerHealthService.New({ MaxHealth = MAX_PLAYER_HEALTH }, defenseModifiers, runtime.Clock)
 	local enemyCombat = EnemyCombat.New(playerHealth, skills, {
 		DefenseXP = { Base = DEFENSE_XP_BASE, PerLevel = DEFENSE_XP_PER_LEVEL, Minimum = DEFENSE_XP_MINIMUM, Maximum = DEFENSE_XP_MAXIMUM },
 		ProgressionSkillId = SkillIds.Melee,
@@ -287,6 +378,10 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 	-- trusted writes that latch historical onboarding milestones. It needs only Skills (level reads) and
 	-- Economy (the atomic post-training Gold reward); everything else it reads from data.
 	local onboarding = OnboardingService.New(playerData, { Skills = skills, Economy = economy })
+	-- First-visit zone discovery: grants a one-time Gold reward when the player physically reaches a new
+	-- wilderness zone. Server-authoritative -- the zone is resolved from the real world position via the
+	-- injected adapter, never from client input -- and atomic (flag + Gold credit in one transaction).
+	local discovery = DiscoveryService.New(playerData, economy, worldAdapters.PlayerZoneResolver)
 
 	-- Onboarding first-ore milestone: recorded only from a real Mining settlement that actually awarded
 	-- Iron Ore (onboarding filters by item), so buying ore never satisfies it. Best-effort and pcall-
@@ -318,6 +413,8 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		OfflineTraining = offlineTraining,
 		PlayerHealth = playerHealth,
 		Onboarding = onboarding,
+		DefenseSummary = defenseSummary,
+		Discovery = discovery,
 	}, offlineReturnSummaries)
 
 	local composition = {}
@@ -339,6 +436,7 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		OfflineTraining = offlineTraining,
 		PlayerHealth = playerHealth,
 		Onboarding = onboarding,
+		Discovery = discovery,
 		-- World's heartbeat drives this to resolve enemy attacks; exposed here so Bootstrap can inject
 		-- it into World.Start alongside the Enemies service.
 		EnemyCombat = enemyCombat,
@@ -465,6 +563,13 @@ function Composition.New(playerData: PlayerData, runtime: Runtime, worldAdapters
 		-- The only onboarding write a client may trigger: record that the starter-focus framing was
 		-- confirmed. It grants no gold/items and cannot mark any other step complete.
 		return onboarding.AcknowledgeStarterFocus(userId)
+	end
+
+	handlers[RequestIds.RegionDiscoverCurrentZone] = function(userId: number, _payload: any): (any?, string?)
+		-- The client asks "have I just entered somewhere new?"; the server resolves the player's REAL
+		-- position and grants the first-visit reward only if they are genuinely in a new discoverable zone.
+		-- No client-supplied zone id is trusted, so a discovery can never be spoofed.
+		return discovery.DiscoverCurrentZone(userId)
 	end
 
 	handlers[RequestIds.OfflineTrainingSetFocus] = function(userId: number, payload: any): (any?, string?)

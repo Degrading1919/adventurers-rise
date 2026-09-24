@@ -201,11 +201,13 @@ function Service.New(playerData: PlayerData, inventory: Inventory, skills: Skill
 				abort("InsufficientSmithingLevel")
 			end
 
-			-- ProcessingSpeedBonus is intentionally NOT consumed: Craft is an atomic transaction with no
-			-- authoritative action-time to shorten, and fabricating a delay would not be trustworthy.
-			local materialEfficiency = if outputIsEquipment
-				then math.clamp(math.max(0, modifierTotal(resolveSmithingModifiers(data), "MaterialEfficiencyBonus")), 0, MAX_MATERIAL_EFFICIENCY)
-				else 0
+			-- Both Smithing production branches reduce input material cost, applied to their own recipe
+			-- class (docs/MASTERY_TREES.md): Forgemaster's MaterialEfficiencyBonus for EQUIPMENT recipes,
+			-- Smelter's ProcessingEfficiencyBonus for ore-to-bar SMELTING (non-equipment) recipes. Craft is
+			-- an atomic transaction with no action-time to shorten, so Smelter's "faster and/or more
+			-- efficient ore-to-bar processing" is realised as the efficiency half (less ore per bar).
+			local efficiencyKey = if outputIsEquipment then "MaterialEfficiencyBonus" else "ProcessingEfficiencyBonus"
+			local materialEfficiency = math.clamp(math.max(0, modifierTotal(resolveSmithingModifiers(data), efficiencyKey)), 0, MAX_MATERIAL_EFFICIENCY)
 
 			-- Determine the batch quantity. Craft Max is computed here from authoritative available
 			-- materials (the tightest input), bounded by MAX_BATCH_QUANTITY -- never a client-supplied max.

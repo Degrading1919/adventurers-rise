@@ -34,6 +34,8 @@ export type Result = {
 	TotalOre: number,
 	MiningXP: number,
 	MiningState: any,
+	-- Whole raw gems earned this settlement from Mining "Prospecting" (0 without the mastery).
+	GemAmount: number,
 }
 export type ToolInfo = {
 	ToolInstanceId: string,
@@ -106,6 +108,9 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 	-- same total as one long settlement -- the small real Mastery rate bonuses are no longer lost to
 	-- per-settlement flooring at ~1s heartbeat chunk sizes.
 	local oreCarry: { [number]: number } = {}
+	-- Fractional carry for Mining "Prospecting" gems (a deterministic rare byproduct), mirroring oreCarry
+	-- so gem accrual is chunk-size independent and never leaks across sessions.
+	local gemCarry: { [number]: number } = {}
 
 	local service = {}
 
@@ -223,6 +228,10 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		local miningModifierTotals = resolveMiningModifiers(userId)
 		local speedMultiplier = 1 + math.max(0, modifierTotal(miningModifierTotals, "GatheringSpeedBonus"))
 		local yieldMultiplier = 1 + math.max(0, modifierTotal(miningModifierTotals, "PrimaryYieldBonus"))
+		-- Mining "Prospecting" (RareResourceBonus): raw gems as a deterministic rare byproduct, a fraction
+		-- of the ore's exact value carried across settlements like ore. No bonus == no gems (baseline mining
+		-- is unchanged), and gems never affect ore/XP.
+		local rareBonus = math.max(0, modifierTotal(miningModifierTotals, "RareResourceBonus"))
 
 		-- Exact fractional ore this settlement earns, plus the remainder carried from earlier settlements
 		-- of this session. Flooring the running total (rather than each settlement independently) is what
@@ -236,6 +245,10 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 			-- the unspent time and retries next tick) and leave the carry untouched, so nothing is lost.
 			return nil, "GatheringIntervalTooShort"
 		end
+
+		-- Whole gems earned this settlement (Prospecting), keeping the sub-unit remainder in gemCarry.
+		local availableGems = exactOre * rareBonus + (gemCarry[userId] or 0)
+		local gemAmount = math.floor(availableGems)
 
 		local result: Result? = nil
 		local mutationReason: string? = nil
@@ -257,6 +270,11 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 			if not awardedState then
 				abort(xpReason or "XPUpdateFailed")
 			end
+			-- Prospecting gems are a best-effort byproduct: a gem-stack overflow must never roll back the
+			-- ore/XP the player actually earned, so we ignore an AddStack failure here.
+			if gemAmount > 0 then
+				inventory.AddStackToData(data, "item_raw_gem", gemAmount)
+			end
 			result = {
 				NodeId = definition.Id,
 				ToolInstanceId = toolInstanceId,
@@ -266,6 +284,7 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 				TotalOre = resultingOre,
 				MiningXP = miningXP,
 				MiningState = awardedState,
+				GemAmount = gemAmount,
 			}
 		end)
 		if not ok then
@@ -274,6 +293,8 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 		-- Only now that the whole ore is committed do we consume it from the running total, keeping the
 		-- sub-unit remainder for the next settlement. A failed/rolled-back settlement leaves carry intact.
 		oreCarry[userId] = availableOre - oreAmount
+		-- Consume only the whole gems awarded; keep the sub-unit remainder for later (parallels oreCarry).
+		gemCarry[userId] = availableGems - gemAmount
 		return result, mutationReason
 	end
 
@@ -282,6 +303,7 @@ function Service.New(playerData: PlayerData, equipment: Equipment, inventory: In
 	-- leave none behind. Dropping an in-progress carry only ever forfeits a sub-unit fraction of ore.
 	function service.ResetCarry(userId: number)
 		oreCarry[userId] = nil
+		gemCarry[userId] = nil
 	end
 
 	return table.freeze(service)

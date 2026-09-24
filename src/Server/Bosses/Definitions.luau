@@ -81,6 +81,14 @@ local definitions: { [string]: Definition } = {
 		loot(common("item_iron_bar", 1), rare("item_chieftain_fang", 1, 0.15)),
 		ProgressionFlagIds.GoblinChieftainDefeated
 	),
+	-- Region I's second shared boss (the ruined-watchtower captain). Same reusable framework: a
+	-- guaranteed common material for every eligible participant plus an independent rare-seal roll.
+	[EnemyIds.BanditWarlord] = definition(
+		EnemyIds.BanditWarlord,
+		eligibility(0.05),
+		loot(common("item_iron_bar", 2), rare("item_warlord_seal", 1, 0.15)),
+		ProgressionFlagIds.BanditWarlordDefeated
+	),
 }
 
 local function validItemReward(value: any): boolean

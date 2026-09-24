@@ -125,6 +125,16 @@ test("Iron Ore uses a stable nondepleting gathering definition", function()
 	equal(node.IsDepleting, false)
 end)
 
+test("Coal is a second stable gathering node, gated above iron and yielding its own resource", function()
+	equal(GatheringNodeIds.ById[GatheringNodeIds.Coal], true)
+	local coal = GatheringDefinitions.ById[GatheringNodeIds.Coal]
+	equal(coal.Id, GatheringNodeIds.Coal)
+	equal(coal.OutputItemId, "item_coal")
+	equal(coal.SkillId, SkillIds.Mining)
+	equal(coal.IsDepleting, false)
+	assert(coal.RequiredMiningLevel > 1, "coal should be gated above the starting iron node")
+end)
+
 test("basic and upgraded pickaxes use centralized mining effectiveness", function()
 	local basic = assert(ItemDefinitions.ById["tool_pickaxe_basic"].Mining)
 	local upgraded = assert(ItemDefinitions.ById["tool_pickaxe_upgraded"].Mining)
@@ -390,6 +400,27 @@ test("ResetCarry drops the in-progress fraction so a fresh session starts clean"
 		total += assert(f.Service.GatherForElapsed(7, IronNode, 1)).OreAmount
 	end
 	equal(total, 5)
+end)
+
+test("Prospecting (RareResourceBonus) yields raw gems as a deterministic carried byproduct; none without it", function()
+	-- Baseline mining (no RareResourceBonus) awards ore only, no gems.
+	local plain = fixture()
+	local plainResult = assert(plain.Service.GatherForElapsed(7, IronNode, 2))
+	equal(plainResult.OreAmount, 2)
+	equal(plainResult.GemAmount, 0)
+	equal(plain.Records[7].Inventory.Stacks["item_raw_gem"], nil)
+
+	-- With 50% RareResourceBonus, exactOre (2) * 0.5 = 1 whole gem this settlement.
+	local f = fixture(function() return { RareResourceBonus = 0.5 } end)
+	local first = assert(f.Service.GatherForElapsed(7, IronNode, 2))
+	equal(first.OreAmount, 2)
+	equal(first.GemAmount, 1)
+	equal(f.Records[7].Inventory.Stacks["item_raw_gem"], 1)
+
+	-- Deterministic sub-unit carry: 1s (0.5 gem) awards none, the next 1s (0.5 + 0.5 carry = 1.0) awards one.
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 1)).GemAmount, 0)
+	equal(assert(f.Service.GatherForElapsed(7, IronNode, 1)).GemAmount, 1)
+	equal(f.Records[7].Inventory.Stacks["item_raw_gem"], 2)
 end)
 
 print(("%d Gathering checks passed"):format(passed))

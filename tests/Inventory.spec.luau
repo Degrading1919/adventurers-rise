@@ -75,6 +75,17 @@ test("definitions contain only the required classified slice items", function()
 		[BasicPickaxe] = "Discrete",
 		tool_pickaxe_upgraded = "Discrete",
 		item_chieftain_fang = "Stackable",
+		item_warlord_seal = "Stackable",
+		armor_iron_helm = "Discrete",
+		armor_iron_body = "Discrete",
+		armor_iron_legs = "Discrete",
+		item_coal = "Stackable",
+		item_steel_bar = "Stackable",
+		item_raw_gem = "Stackable",
+		weapon_sword_steel = "Discrete",
+		armor_steel_helm = "Discrete",
+		armor_steel_body = "Discrete",
+		armor_steel_legs = "Discrete",
 	}
 	local count = 0
 	for id, definition in ItemDefinitions.ById do
@@ -82,9 +93,17 @@ test("definitions contain only the required classified slice items", function()
 		equal(definition.Kind, expected[id])
 		count += 1
 	end
-	equal(count, 7)
+	equal(count, 18)
 	equal(ItemDefinitions.ById[StarterSword].Equipment.SlotId, EquipmentSlots.Weapon)
 	equal(ItemDefinitions.ById[BasicPickaxe].Equipment.SlotId, EquipmentSlots.Tool)
+	equal(ItemDefinitions.ById.armor_iron_helm.Equipment.SlotId, EquipmentSlots.Head)
+	equal(ItemDefinitions.ById.armor_iron_body.Equipment.SlotId, EquipmentSlots.Body)
+	equal(ItemDefinitions.ById.armor_iron_legs.Equipment.SlotId, EquipmentSlots.Legs)
+	equal(ItemDefinitions.ById.armor_iron_body.Armor.DamageReduction, 0.07)
+	-- Steel out-protects iron piece-for-piece, so the tier is a real upgrade, not a reskin.
+	equal(ItemDefinitions.ById.armor_steel_body.Armor.DamageReduction, 0.10)
+	assert(ItemDefinitions.ById.armor_steel_helm.Armor.DamageReduction > ItemDefinitions.ById.armor_iron_helm.Armor.DamageReduction, "steel helm must beat iron")
+	equal(ItemDefinitions.ById.armor_steel_legs.Equipment.SlotId, EquipmentSlots.Legs)
 end)
 
 test("trusted stack mutations preserve unrelated PlayerData state", function()

@@ -134,12 +134,24 @@ function Service.New(runtime: Runtime)
 		return derive(definition, level)
 	end
 
-	function service.Create(definitionId: string): (State?, string?)
+	-- Optional levelRange biases where in the archetype's band this instance rolls (e.g. a near-town
+	-- territory spawns the low end, a deeper one the high end -- a real difficulty-by-distance gradient).
+	-- It is always clamped INTO the definition's LevelRange, so a territory can never roll out of band.
+	function service.Create(definitionId: string, levelRange: { Minimum: number, Maximum: number }?): (State?, string?)
 		local definition, reason = definitionFor(definitionId)
 		if not definition then
 			return nil, reason
 		end
-		local level = runtime.RollInteger(definition.LevelRange.Minimum, definition.LevelRange.Maximum)
+		local minLevel, maxLevel = definition.LevelRange.Minimum, definition.LevelRange.Maximum
+		if type(levelRange) == "table" and type(levelRange.Minimum) == "number" and type(levelRange.Maximum) == "number"
+			and levelRange.Minimum == levelRange.Minimum and levelRange.Maximum == levelRange.Maximum then
+			minLevel = math.clamp(math.floor(levelRange.Minimum), definition.LevelRange.Minimum, definition.LevelRange.Maximum)
+			maxLevel = math.clamp(math.floor(levelRange.Maximum), definition.LevelRange.Minimum, definition.LevelRange.Maximum)
+			if minLevel > maxLevel then
+				minLevel, maxLevel = maxLevel, minLevel
+			end
+		end
+		local level = runtime.RollInteger(minLevel, maxLevel)
 		if not validLevel(level, definition.LevelRange) then
 			return nil, "InvalidLevelRoll"
 		end
@@ -292,6 +304,51 @@ function Service.New(runtime: Runtime)
 					return result.AppliedDamage, nil
 				end,
 			}, nil
+		end
+	end
+
+	-- Builds the Melee "Cleave" resolver: given a primary target, returns secondary targets (each an
+	-- ApplyDamage closure + its RuntimeId) for every OTHER *non-boss* enemy the injected world provider
+	-- reports as physically near it. Per docs/MASTERY_TREES, Cleave is for multiple nearby enemies and
+	-- GROUP FARMING, but must not be a boss path -- so BOSSES ARE EXCLUDED here. A cleaved kill queues its
+	-- death like a primary hit, so CombatRewards can consume it exactly once and pay its Gold (rewarding
+	-- group farming), and World's normal death poll still reaps/respawns it.
+	function service.CreateCleaveResolver(nearbyProvider: (string) -> ({ string }?, string?))
+		assert(type(nearbyProvider) == "function", "Enemies requires a trusted cleave-targets provider")
+		return function(primaryRuntimeId: string): ({ { RuntimeId: string, ApplyDamage: (number) -> (number?, string?) } }?, string?)
+			if not validStableId(primaryRuntimeId) then
+				return nil, "InvalidRuntimeId"
+			end
+			local ids, reason = nearbyProvider(primaryRuntimeId)
+			if type(ids) ~= "table" then
+				return nil, reason or "NoCleaveTargets"
+			end
+			local targets: { { RuntimeId: string, ApplyDamage: (number) -> (number?, string?) } } = {}
+			for _, runtimeId in ids do
+				if validStableId(runtimeId) and runtimeId ~= primaryRuntimeId then
+					local snapshot = enemies[runtimeId]
+					local definition = if snapshot then Definitions.ById[snapshot.DefinitionId] else nil
+					-- Only alive, non-boss enemies are valid cleave targets.
+					if snapshot and snapshot.Alive and definition and not definition.Boss then
+						local id = runtimeId
+						table.insert(targets, {
+							RuntimeId = id,
+							ApplyDamage = function(amount: number): (number?, string?)
+								local result, damageReason = service.ApplyDamage(id, amount)
+								if not result then
+									return nil, damageReason
+								end
+								-- Queue the death so the reward coordinator can consume it exactly once.
+								if result.Death then
+									pendingDeaths[id] = copyDeath(result.Death)
+								end
+								return result.AppliedDamage, nil
+							end,
+						})
+					end
+				end
+			end
+			return targets, nil
 		end
 	end
 

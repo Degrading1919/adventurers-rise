@@ -23,6 +23,9 @@ local ids: { [string]: string } = {
 	TrainingBegin = "training_begin",
 	TrainingEnd = "training_end",
 	OnboardingAcknowledgeStarterFocus = "onboarding_acknowledge_starter_focus",
+	-- Client asks the server to check whether the player has physically entered a new discoverable zone;
+	-- the server resolves the real position and grants a one-time first-visit reward if so.
+	RegionDiscoverCurrentZone = "region_discover_current_zone",
 }
 
 local byId: { [string]: boolean } = {}

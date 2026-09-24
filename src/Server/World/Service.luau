@@ -13,6 +13,7 @@
 -- health/combat system.
 
 local EnemyAI = require(script.Parent.EnemyAI)
+local RegionDefinitions = require(game:GetService("ReplicatedStorage").Shared.RegionDefinitions)
 
 local ENEMY_SPAWN_TAG = "AR_EnemySpawn"
 -- A territory volume: a tagged BasePart whose position is the population's home/leash anchor and whose
@@ -29,6 +30,10 @@ local SHOP_TAG = "AR_Shop"
 local ATTR_TERRITORY_ID = "TerritoryId"
 local ATTR_TERRITORY_RADIUS = "Radius"
 local ATTR_TERRITORY_POPULATION = "Population"
+-- Optional per-territory level band (biases the roll within the archetype's allowed range, giving a
+-- real difficulty-by-distance gradient: near-town territories spawn low, deeper ones spawn high).
+local ATTR_TERRITORY_LEVEL_MIN = "LevelMin"
+local ATTR_TERRITORY_LEVEL_MAX = "LevelMax"
 -- Optional per-territory movement-tuning overrides (any of EnemyAI.Config's keys); absent => defaults.
 local TERRITORY_TUNING_KEYS = { "AggroRadius", "DeaggroRadius", "LeashRadius", "RoamRadius", "RoamSpeed", "ChaseSpeed", "ArriveRadius", "RoamPauseMin", "RoamPauseMax", "AttackRange" }
 
@@ -38,6 +43,25 @@ local ENEMY_DISPLAY_NAMES: { [string]: string } = {
 	enemy_goblin = "Goblin",
 	enemy_goblin_chieftain = "Goblin Chieftain",
 	enemy_wolf = "Wolf",
+	enemy_hobgoblin = "Hobgoblin",
+	enemy_bandit = "Bandit",
+	enemy_bandit_warlord = "Bandit Warlord",
+}
+-- Shared-boss archetypes get the tall boss silhouette (and the client shows a boss bar). Data-driven so
+-- new bosses only add a row, never touch logic.
+local BOSS_DEFINITION_IDS: { [string]: boolean } = {
+	enemy_goblin_chieftain = true,
+	enemy_bandit_warlord = true,
+}
+-- Provisional placeholder silhouettes/colours for archetypes with no production mesh template. Stored
+-- as plain number tuples (not Vector3/Color3) so the module loads headlessly in tests; the box builder
+-- constructs the engine types at use time.
+local ENEMY_BOX_APPEARANCE: { [string]: { Size: { number }, Color: { number } } } = {
+	enemy_goblin_chieftain = { Size = { 6, 10, 6 }, Color = { 120, 20, 20 } },
+	enemy_bandit_warlord = { Size = { 5.5, 9, 5.5 }, Color = { 96, 44, 40 } },
+	enemy_wolf = { Size = { 2.6, 3, 5 }, Color = { 85, 85, 95 } },
+	enemy_hobgoblin = { Size = { 4, 6.5, 4 }, Color = { 96, 112, 58 } },
+	enemy_bandit = { Size = { 3, 5.5, 3 }, Color = { 122, 96, 70 } },
 }
 
 -- Territory defaults when a marker omits an attribute, and how far past a territory's edge an enemy may
@@ -51,6 +75,19 @@ local TERRITORY_LEASH_BUFFER = 40
 local ACTIVATION_RADIUS = 220
 -- Gentle vertical bob applied while an enemy is moving, to read as locomotion without an animated rig.
 local WALK_BOB_AMPLITUDE = 0.35
+
+-- Terrain-following for kinematic enemies. As an awake enemy walks, its ground height is re-sampled from
+-- the world surface directly beneath its NEXT position, so roaming/chasing populations follow the relief
+-- of Region I (rolling hills, the raised town plateau, the descent into the mine hollow) instead of
+-- hovering at a fixed spawn height. A ray is cast straight down from a little above the enemy's last
+-- known ground: a solid hit within a sane step band adopts that height; a miss (a ledge/overhang), a
+-- water hit, or a step sharper than the band is REJECTED and the enemy holds its current height. Combined
+-- with leashing, that rejection naturally steers roaming away from cliffs and the river without any
+-- pathfinding graph. On flat ground this samples the same height every frame, so it is a no-op there.
+local GROUND_PROBE_UP = 24 -- begin the ray this many studs above the last known ground height
+local GROUND_PROBE_DOWN = 160 -- and cast down this far to find the surface beneath
+local MAX_STEP_DROP = 12 -- reject a surface more than this far BELOW current (a cliff/edge)
+local MAX_STEP_RISE = 16 -- reject a surface more than this far ABOVE current (a wall/steep face)
 -- Degrees to rotate a facing enemy so the model's visible front points where it heads. The provisional
 -- meshes' authored front is not -Z, so this corrects it; verified against the live models in Studio.
 local FACING_YAW_OFFSET = 0
@@ -82,7 +119,7 @@ local ENEMY_ATTACK_RANGE = 10
 local ENEMY_ATTACK_COOLDOWN = 2
 
 export type Enemies = {
-	read Create: (string) -> (any?, string?),
+	read Create: (string, { Minimum: number, Maximum: number }?) -> (any?, string?),
 	read GetSnapshot: (string) -> (any?, string?),
 	read Remove: (string) -> (any?, string?),
 }
@@ -143,6 +180,8 @@ type EnemyRecord = {
 	AIConfig: EnemyAI.Config,
 	AIMemory: EnemyAI.Memory,
 	BobPhase: number,
+	-- The territory's level band, reused on respawn so a zone keeps its difficulty (nil = archetype default).
+	LevelRange: { Minimum: number, Maximum: number }?,
 }
 
 local Service = {}
@@ -276,6 +315,31 @@ function Service.New(runtime: Runtime)
 	-- GatheringNodeResolver: (userId, nodeId) -> (Node, reason). Iron Ore is non-depleting, so a
 	-- physically present node is always Eligible. Several physical rocks may share one stable node ID;
 	-- the nearest one to the gatherer decides the reported Distance.
+	-- CleaveTargetsProvider: (primaryRuntimeId) -> ({ runtimeIds }, reason). Runtime ids of OTHER enemies
+	-- physically within the cleave radius of the primary target. World only answers "who is near whom";
+	-- alive/eligibility and damage stay in the repository Enemies service (its ApplyDamage rejects the
+	-- dead), so a fading corpse in range is a harmless no-op.
+	local CLEAVE_RADIUS_STUDS = 12
+	function service.CleaveTargetsProvider(primaryRuntimeId: string): ({ string }?, string?)
+		if type(primaryRuntimeId) ~= "string" or primaryRuntimeId == "" then
+			return nil, "InvalidRuntimeId"
+		end
+		local primaryModel = enemyModels[primaryRuntimeId]
+		if not primaryModel or not primaryModel.Parent then
+			return nil, "EnemyInstanceNotFound"
+		end
+		local origin = primaryModel:GetPivot().Position
+		local nearby: { string } = {}
+		for runtimeId, model in enemyModels do
+			if runtimeId ~= primaryRuntimeId and model and model.Parent then
+				if (origin - model:GetPivot().Position).Magnitude <= CLEAVE_RADIUS_STUDS then
+					table.insert(nearby, runtimeId)
+				end
+			end
+		end
+		return nearby, nil
+	end
+
 	function service.GatheringNodeResolver(userId: number, nodeId: string): (any?, string?)
 		if type(nodeId) ~= "string" or nodeId == "" then
 			return nil, "InvalidNodeId"
@@ -297,6 +361,21 @@ function Service.New(runtime: Runtime)
 			return nil, "NodeInstanceNotFound"
 		end
 		return { Id = nodeId, Eligible = true, Distance = nearest }, nil
+	end
+
+	-- PlayerZoneResolver: (userId) -> (zoneId, reason). The zone the player physically occupies, derived
+	-- from their authoritative character position via the pure RegionDefinitions classifier, or
+	-- (nil, "NotInAZone") in open wilderness between zones. Discovery uses this as its anti-spoof source.
+	function service.PlayerZoneResolver(userId: number): (string?, string?)
+		local position, reason = characterPosition(userId)
+		if not position then
+			return nil, reason
+		end
+		local zone = RegionDefinitions.ZoneAt(position.X, position.Z)
+		if not zone then
+			return nil, "NotInAZone"
+		end
+		return zone.Id, nil
 	end
 
 	-- Shared nearest-instance scan over a tag, honouring the Workspace-descendant rule. `matches`
@@ -416,6 +495,29 @@ function Service.New(runtime: Runtime)
 		return maxY - minY
 	end
 
+	-- One ray configuration, reused every sample: hit ONLY the world Terrain (never enemies, characters,
+	-- props, or markers), and do not ignore water, so a water surface registers as a hit we can reject.
+	local groundRayParams = RaycastParams.new()
+	groundRayParams.FilterType = Enum.RaycastFilterType.Include
+	groundRayParams.FilterDescendantsInstances = { runtime.Workspace.Terrain }
+	groundRayParams.IgnoreWater = false
+
+	-- Ground height of the walkable surface beneath (x, z), or fallbackY when there is no acceptable
+	-- surface there (see the terrain-following note near the movement constants). A pure read of static
+	-- terrain that never mutates state, so both spawning/respawning and the move pass can share it.
+	local function sampleGroundY(x: number, z: number, fallbackY: number): number
+		local origin = Vector3.new(x, fallbackY + GROUND_PROBE_UP, z)
+		local hit = runtime.Workspace:Raycast(origin, Vector3.new(0, -GROUND_PROBE_DOWN, 0), groundRayParams)
+		if hit == nil or hit.Material == Enum.Material.Water then
+			return fallbackY
+		end
+		local y = hit.Position.Y
+		if y < fallbackY - MAX_STEP_DROP or y > fallbackY + MAX_STEP_RISE then
+			return fallbackY
+		end
+		return y
+	end
+
 	local function attachLabel(host: BasePart, offsetY: number, definitionId: string, level: any)
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "Label"
@@ -468,12 +570,11 @@ function Service.New(runtime: Runtime)
 			body.Name = "Body"
 			body.Anchored = true
 			body.CanCollide = false
-			-- Provisional silhouettes so archetypes read as distinct even without production art: a tall
-			-- red boss, a low elongated grey wolf, a green goblin/other.
-			local isBoss = definitionId == "enemy_goblin_chieftain"
-			local isWolf = definitionId == "enemy_wolf"
-			body.Size = if isBoss then Vector3.new(6, 10, 6) elseif isWolf then Vector3.new(2.6, 3, 5) else Vector3.new(3, 5, 3)
-			body.Color = if isBoss then Color3.fromRGB(120, 20, 20) elseif isWolf then Color3.fromRGB(85, 85, 95) else Color3.fromRGB(70, 130, 60)
+			-- Provisional silhouettes so archetypes read as distinct even without production art, data-driven
+			-- from ENEMY_BOX_APPEARANCE (default = a green goblin-sized box).
+			local appearance = ENEMY_BOX_APPEARANCE[definitionId]
+			body.Size = if appearance then Vector3.new(appearance.Size[1], appearance.Size[2], appearance.Size[3]) else Vector3.new(3, 5, 3)
+			body.Color = if appearance then Color3.fromRGB(appearance.Color[1], appearance.Color[2], appearance.Color[3]) else Color3.fromRGB(70, 130, 60)
 			body.Material = Enum.Material.SmoothPlastic
 			-- Sit the body on the marker (plus its territory offset) so its centre is above the floor.
 			body.CFrame = marker.CFrame + Vector3.new(spawnOffset.X, body.Size.Y / 2, spawnOffset.Z)
@@ -513,6 +614,9 @@ function Service.New(runtime: Runtime)
 	-- the far-off spot where it died mid-chase) and populations don't all stack on one exact marker.
 	local function seatInTerritory(record: EnemyRecord)
 		local ox, oz = randomOffsetInRadius(record.Radius)
+		-- Re-ground at the fresh roam point so a respawn seats on the terrain there, not at the (possibly
+		-- elevated) height where the previous life happened to die.
+		record.GroundY = sampleGroundY(record.Home.X + ox, record.Home.Z + oz, record.GroundY)
 		record.BasePosition = Vector3.new(record.Home.X + ox, record.GroundY, record.Home.Z + oz)
 		record.AIMemory = freshMemory()
 		record.BobPhase = 0
@@ -564,7 +668,7 @@ function Service.New(runtime: Runtime)
 		-- clearing it again here is defensive/idempotent, covering any path that retires an id directly.
 		lastAttackAt[previousId] = nil
 		enemyCombat.ClearEnemy(previousId)
-		local state, reason = enemies.Create(record.DefinitionId)
+		local state, reason = enemies.Create(record.DefinitionId, record.LevelRange)
 		if not state then
 			runtime.Warn(("[World] Respawn failed for %s: %s"):format(record.DefinitionId, tostring(reason)))
 			return
@@ -714,7 +818,12 @@ function Service.New(runtime: Runtime)
 						local dist = math.sqrt(dx * dx + dz * dz)
 						if dist > 1e-3 then
 							local step = math.min(intent.Speed * dt, dist)
-							newBase = Vector3.new(base.X + dx / dist * step, record.GroundY, base.Z + dz / dist * step)
+							local nx = base.X + dx / dist * step
+							local nz = base.Z + dz / dist * step
+							-- Follow the terrain: adopt the surface height beneath the next XZ (or hold the current
+							-- height at a rejected step), so the body walks up and down Region I's relief.
+							record.GroundY = sampleGroundY(nx, nz, record.GroundY)
+							newBase = Vector3.new(nx, record.GroundY, nz)
 							moving = step > 1e-3
 						end
 					end
@@ -749,13 +858,19 @@ function Service.New(runtime: Runtime)
 	-- Spawns the enemy populations for every territory (and any legacy single-spawn marker), binds each
 	-- to a repository runtime instance, starts the shared death poll, and -- when a Heartbeat is
 	-- available -- the server-authoritative movement loop.
-	function service.Start(enemies: Enemies, enemyCombat: EnemyCombat)
+	function service.Start(enemies: Enemies, enemyCombat: EnemyCombat, playerHealth: any?)
 		assert(
 			type(enemies) == "table"
 				and type(enemies.Create) == "function"
 				and type(enemies.GetSnapshot) == "function"
 				and type(enemies.Remove) == "function",
 			"World.Start requires the repository Enemies service"
+		)
+		-- Optional: when the runtime health service is provided, the shared poll below also ticks Defense
+		-- "Resilience" regeneration for every player, on the same authoritative cadence as enemy attacks.
+		assert(
+			playerHealth == nil or (type(playerHealth) == "table" and type(playerHealth.Regenerate) == "function"),
+			"World.Start playerHealth must expose Regenerate when provided"
 		)
 		assert(
 			type(enemyCombat) == "table"
@@ -789,8 +904,8 @@ function Service.New(runtime: Runtime)
 
 		-- Creates one enemy of definitionId belonging to a territory (home + radius + movement config),
 		-- seated at a random point inside it, and registers its record with full movement state.
-		local function spawnEnemy(definitionId: string, marker: BasePart, home: Vector3, radius: number, config: EnemyAI.Config)
-			local state, reason = enemies.Create(definitionId)
+		local function spawnEnemy(definitionId: string, marker: BasePart, home: Vector3, radius: number, config: EnemyAI.Config, levelRange: { Minimum: number, Maximum: number }?)
+			local state, reason = enemies.Create(definitionId, levelRange)
 			if not state then
 				runtime.Warn(("[World] Enemy create failed for %s: %s"):format(definitionId, tostring(reason)))
 				return
@@ -813,6 +928,7 @@ function Service.New(runtime: Runtime)
 				AIConfig = config,
 				AIMemory = freshMemory(),
 				BobPhase = 0,
+				LevelRange = levelRange,
 			})
 		end
 
@@ -845,8 +961,14 @@ function Service.New(runtime: Runtime)
 					end
 					local config = EnemyAI.ResolveConfig(overrides)
 					local home = marker.Position
+					-- Optional per-territory level band (clamped into the archetype's range by Enemies.Create).
+					local levelMin = marker:GetAttribute(ATTR_TERRITORY_LEVEL_MIN)
+					local levelMax = marker:GetAttribute(ATTR_TERRITORY_LEVEL_MAX)
+					local levelRange = if type(levelMin) == "number" and type(levelMax) == "number"
+						then { Minimum = levelMin, Maximum = levelMax }
+						else nil
 					for _ = 1, population do
-						spawnEnemy(definitionId, marker, home, radius, config)
+						spawnEnemy(definitionId, marker, home, radius, config, levelRange)
 					end
 				end
 			end
@@ -865,11 +987,24 @@ function Service.New(runtime: Runtime)
 			end
 		end
 
+		-- Ticks Resilience regeneration for every connected player on the same beat as enemy attacks, so
+		-- recovery and incoming damage resolve against the same authoritative cadence. No-op without a
+		-- health service or for players with no RecoveryBonus.
+		local function regenPass(dt: number)
+			if playerHealth == nil then
+				return
+			end
+			for _, player in runtime.Players:GetPlayers() do
+				playerHealth.Regenerate(player.UserId, dt)
+			end
+		end
+
 		runtime.Spawn(function()
 			while true do
 				runtime.Wait(DEATH_POLL_SECONDS)
 				pollDeaths(enemies, enemyCombat)
 				attackPass(enemies, enemyCombat)
+				regenPass(DEATH_POLL_SECONDS)
 			end
 		end)
 

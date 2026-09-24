@@ -2,6 +2,7 @@
 
 local SkillIds = require("SkillIds")
 local EquipmentSlots = require("EquipmentSlots")
+local ItemDefinitions = require("ItemDefinitions")
 local EnemyIds = require("EnemyIds")
 local GatheringNodeIds = require("GatheringNodeIds")
 local AscensionIds = require("AscensionIds")
@@ -147,6 +148,10 @@ local function buildStack(options: any?)
 	-- Shop proximity double: default to "at the shop" (distance 0, keyed by catalog/shop id) so existing
 	-- economy tests exercise the normal near case; a test sets a large distance to model shopping remotely.
 	local shopDistances: { [string]: number } = {}
+	-- Which zone each user is standing in, for the Discovery adapter (nil == open wilderness).
+	local playerZones: { [number]: string } = {}
+	-- Runtime ids of enemies near a given primary target, for the Cleave adapter.
+	local cleaveTargets: { [string]: { string } } = {}
 	local worldAdapters = {
 		CombatDistanceProvider = function(_attackerUserId: number, enemyState: any): (number?, string?)
 			local distance = combatDistances[enemyState.RuntimeId]
@@ -178,6 +183,16 @@ local function buildStack(options: any?)
 				return 0, nil
 			end
 			return distance, nil
+		end,
+		PlayerZoneResolver = function(userId: number): (string?, string?)
+			local zoneId = playerZones[userId]
+			if zoneId == nil then
+				return nil, "NotInAZone"
+			end
+			return zoneId, nil
+		end,
+		CleaveTargetsProvider = function(primaryRuntimeId: string): ({ string }?, string?)
+			return cleaveTargets[primaryRuntimeId] or {}, nil
 		end,
 	}
 
@@ -215,6 +230,8 @@ local function buildStack(options: any?)
 	f.Players = players
 	f.Composition = composition
 	f.CombatDistances = combatDistances
+	f.PlayerZones = playerZones
+	f.CleaveTargets = cleaveTargets
 	f.GatheringNodes = gatheringNodes
 	f.StationDistances = stationDistances
 	f.ForgeDistance = forgeDistance
@@ -566,6 +583,32 @@ test("selecting a Melee Might node raises real attack damage through the compose
 	assert(boosted.Result.AppliedDamage > 10 and boosted.Result.AppliedDamage < 10.5, "expected a small damage increase, got " .. tostring(boosted.Result.AppliedDamage))
 end)
 
+test("Melee Cleave splashes damage from the primary hit onto nearby enemies", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	grantWeapon(f, 7)
+	setSkillLevel(f, 7, SkillIds.Melee, 5) -- earns 1 Mastery point; Cleave I requires level 5
+	local primary = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	local secondary = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	f.CombatDistances[primary.RuntimeId] = 1
+	f.CleaveTargets[primary.RuntimeId] = { secondary.RuntimeId }
+
+	-- Without Cleave selected, a landed hit leaves the nearby secondary untouched.
+	local before = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = primary.RuntimeId })
+	assert(before.Ok, before.Reason)
+	equal(before.Result.CleaveHits, 0)
+	equal(assert(f.Composition.Services.Enemies.GetSnapshot(secondary.RuntimeId)).Health, secondary.MaxHealth)
+
+	-- Select Cleave I, then attack: the primary's hit now splashes onto the secondary.
+	f.Advance(2)
+	assert(request(f, 7, RequestIds.MasterySelectNode, { SkillId = SkillIds.Melee, NodeId = MasteryIds.Nodes.MeleeCleave[1] }).Ok)
+	local after = request(f, 7, RequestIds.CombatMeleeAttack, { TargetId = primary.RuntimeId })
+	assert(after.Ok, after.Reason)
+	equal(after.Result.CleaveHits, 1)
+	local secondaryHealth = assert(f.Composition.Services.Enemies.GetSnapshot(secondary.RuntimeId)).Health
+	assert(secondaryHealth < secondary.MaxHealth, "secondary should have taken cleave splash damage")
+end)
+
 test("selecting a Defense Fortitude node raises the composed player's maximum health", function()
 	local f = fixture()
 	joinPlayer(f, 7)
@@ -579,6 +622,40 @@ test("selecting a Defense Fortitude node raises the composed player's maximum he
 	local after = request(f, 7, RequestIds.StateGet, nil)
 	assert(after.Ok, after.Reason)
 	equal(after.Result.Health.MaxHealth, 102) -- floor(100 * 1.02 + 0.5)
+end)
+
+test("equipped iron armour reduces incoming enemy damage through the composed defense pipeline", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local enemy = assert(f.Composition.Services.Enemies.Create(EnemyIds.Goblin))
+	-- Provocation guarantees engagement regardless of relative levels, isolating the damage-reduction math.
+	assert(f.Composition.Services.EnemyCombat.RecordProvocation(enemy.RuntimeId, 7))
+
+	-- Baseline: no armour, no Defense Mastery -> the enemy's full authoritative damage lands.
+	local before = assert(f.Composition.Services.EnemyCombat.ResolveAttack(7, enemy))
+	local baselineDamage = before.Damage
+	assert(baselineDamage > 0, "expected the unarmoured hit to apply positive damage")
+
+	-- Equip the full iron set (Head/Body/Legs), each slot resolved from its own definition.
+	for _, itemId in { "armor_iron_helm", "armor_iron_body", "armor_iron_legs" } do
+		local piece = assert(f.Composition.Services.Inventory.AddDiscreteItem(7, itemId))
+		local slotId = ItemDefinitions.ById[itemId].Equipment.SlotId
+		assert(f.Composition.Services.Equipment.Equip(7, slotId, piece.InstanceId))
+	end
+
+	-- Same enemy, same provocation: only armour changed. Set total reduction = 0.04 + 0.07 + 0.05 = 0.16.
+	local after = assert(f.Composition.Services.EnemyCombat.ResolveAttack(7, enemy))
+	assert(after.Damage < baselineDamage, "armour must reduce incoming damage")
+	local expected = baselineDamage * (1 - 0.16)
+	assert(math.abs(after.Damage - expected) < 1e-6, "expected " .. tostring(expected) .. " got " .. tostring(after.Damage))
+
+	-- Legibility: the read model must surface the same mitigation so the client can show it. With no
+	-- Defense Mastery, the total equals the armour-only share (0.16), both as [0,1] fractions.
+	local state = request(f, 7, RequestIds.StateGet, nil)
+	assert(state.Ok, state.Reason)
+	assert(type(state.Result.Defense) == "table", "read model must expose a Defense block")
+	assert(math.abs(state.Result.Defense.ArmorDamageReduction - 0.16) < 1e-6, "read model armour reduction should be 0.16")
+	assert(math.abs(state.Result.Defense.DamageReduction - 0.16) < 1e-6, "read model total reduction should be 0.16")
 end)
 
 test("a normal Goblin's death pays its authoritative Gold exactly once", function()
@@ -1329,8 +1406,17 @@ test("Ascension: Ascend fails until requirements are met, then succeeds", functi
 		data.ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated] = true
 	end))
 	f.Advance(1)
+	-- Before ascending, the Adventurer holds no rank perk: base max health.
+	equal(assert(request(f, 7, RequestIds.StateGet, nil).Result).Health.MaxHealth, 100)
+	f.Advance(1)
 	local ok = request(f, 7, RequestIds.AscensionAscend, { RankId = AscensionIds.Adept })
 	assert(ok.Ok, ok.Reason)
+	-- Ascending to Adept grants a visible payoff: +8% max health, folded into PlayerHealth via the rank
+	-- perk (floor(100 * 1.08 + 0.5) = 108), and the current-rank perk is surfaced for the Ascend panel.
+	f.Advance(1)
+	local afterState = assert(request(f, 7, RequestIds.StateGet, nil).Result)
+	equal(afterState.Health.MaxHealth, 108)
+	equal(afterState.Ascension.RankPerk.MaxHealthBonus, 0.08)
 end)
 
 -- ===== State read model =====
@@ -1346,7 +1432,11 @@ test("the state read model contains the intended player-facing data and omits in
 	assert(state.PlotStations["station_training_melee"] ~= nil)
 	assert(state.Mastery[SkillIds.Melee] ~= nil)
 	assert(state.Ascension.RankId ~= nil)
-	assert(state.Ascension.AdeptProgress ~= nil)
+	assert(state.Ascension.RankDisplayName ~= nil)
+	assert(state.Ascension.RankPerk ~= nil) -- the perk the current rank grants (for the Ascend panel)
+	-- A fresh Adventurer's next rank is Adept, with its live 4-category requirement progress.
+	assert(state.Ascension.NextRank ~= nil and state.Ascension.NextRank.RankId == AscensionIds.Adept)
+	assert(state.Ascension.NextRank.Progress ~= nil and state.Ascension.NextRank.Progress.RankId == AscensionIds.Adept)
 	assert(state.Health ~= nil and state.Health.Health ~= nil and state.Health.MaxHealth ~= nil)
 	assert(state.Shop ~= nil and state.Shop.Id == "shop_hub" and type(state.Shop.Entries) == "table")
 	assert(type(state.Recipes) == "table" and #state.Recipes > 0)
@@ -1677,6 +1767,49 @@ test("the read model surfaces the Iron Ore node's sanitized requirements for the
 	equal(iron.OutputItemId, "item_iron_ore")
 	equal(iron.SkillId, SkillIds.Mining)
 	equal(iron.RequiredMiningLevel, 1)
+end)
+
+test("first-visit discovery grants a one-time reward from the player's real position; re-entry, town, and wilderness grant nothing", function()
+	local f = fixture()
+	joinPlayer(f, 7)
+	local goldBefore = assert(f.Composition.Services.Economy.GetGold(7))
+
+	-- Physically in the Green Meadows for the first time -> reward.
+	f.PlayerZones[7] = "zone_green_meadows"
+	local first = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
+	assert(first.Ok, first.Reason)
+	equal(first.Result.NewlyDiscovered, true)
+	equal(first.Result.RewardGold, 55)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 55)
+
+	-- Re-entry is idempotent: no second reward. (Advance past the per-request throttle each time.)
+	f.Advance(1)
+	local second = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
+	assert(second.Ok, second.Reason)
+	equal(second.Result.NewlyDiscovered, false)
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 55)
+
+	-- The town is home base, not a discovery.
+	f.Advance(1)
+	f.PlayerZones[7] = "zone_havenbrook"
+	local town = request(f, 7, RequestIds.RegionDiscoverCurrentZone, nil)
+	assert(town.Ok, town.Reason)
+	equal(town.Result.NewlyDiscovered, false)
+
+	-- Open wilderness (and a spoofed payload zone) grants nothing: only the real position counts.
+	f.Advance(1)
+	f.PlayerZones[7] = nil
+	local wild = request(f, 7, RequestIds.RegionDiscoverCurrentZone, { ZoneId = "zone_ashen_ruins" })
+	equal(wild.Ok, false)
+	equal(wild.Reason, "NotInAZone")
+	equal(assert(f.Composition.Services.Economy.GetGold(7)), goldBefore + 55)
+
+	-- The read model surfaces discovered zones for the map (discovered vs unknown).
+	f.Advance(1)
+	local state = request(f, 7, RequestIds.StateGet, nil)
+	assert(state.Ok, state.Reason)
+	equal(state.Result.Discovery.DiscoveredZoneIds["zone_green_meadows"], true)
+	equal(state.Result.Discovery.DiscoveredZoneIds["zone_ashen_ruins"], nil)
 end)
 
 print(("%d Composition checks passed"):format(passed))

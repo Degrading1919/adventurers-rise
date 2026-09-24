@@ -292,4 +292,106 @@ test("the rank/requirement architecture stays data-driven: Ascend follows the de
 	equal(alreadyPastPreviousReason, "AlreadyAscended")
 end)
 
+local function meetAllVanguardRequirements(f)
+	f.Records[7].SkillXP[SkillIds.Melee] = xpForLevel(15)
+	f.Records[7].SkillXP[SkillIds.Defense] = xpForLevel(12)
+	f.Records[7].SkillXP[SkillIds.Mining] = xpForLevel(8)
+	f.Records[7].SkillXP[SkillIds.Smithing] = xpForLevel(10)
+	f.Records[7].ProgressionFlags[ProgressionFlagIds.GoblinChieftainDefeated] = true
+	f.Records[7].ProgressionFlags[ProgressionFlagIds.BanditWarlordDefeated] = true
+end
+
+test("Vanguard is a stable rank chaining from Adept, gated on the steel tier and the second boss", function()
+	equal(AscensionIds.ById[AscensionIds.Vanguard], true)
+	local valid = AscensionDefinitions.Validate(AscensionDefinitions.ById)
+	equal(valid, true)
+	local vanguard = AscensionDefinitions.ById[AscensionIds.Vanguard]
+	equal(vanguard.DisplayName, "Vanguard")
+	equal(vanguard.PreviousRankId, AscensionIds.Adept)
+	local r = vanguard.Requirements
+	equal(r.Offense.Alternatives[1].SkillId, SkillIds.Melee)
+	equal(r.Offense.Alternatives[1].Level, 15)
+	equal(r.Defense.Level, 12)
+	-- Overall-skilling now reaches the steel-tier levels (Mining/Smithing), above Adept's 2/2.
+	equal(r.OverallSkilling.Thresholds[1].Level, 8)
+	equal(r.OverallSkilling.Thresholds[2].Level, 10)
+	-- The end-game boss milestone ties Vanguard to actually defeating the Bandit Warlord.
+	equal(r.BossMilestoneId, ProgressionFlagIds.BanditWarlordDefeated)
+	-- Vanguard grants a real permanent payoff (more max health + starts mitigating hits).
+	equal(vanguard.Perk.MaxHealthBonus, 0.20)
+	equal(vanguard.Perk.IncomingDamageReduction, 0.05)
+end)
+
+test("rank perks are exposed for both the current rank and the next rank", function()
+	local f = fixture()
+	-- Adventurer's perk is the baseline (no bonus).
+	local adventurerPerk = assert(f.Service.GetPerk(7))
+	equal(adventurerPerk.MaxHealthBonus, 0)
+	equal(adventurerPerk.IncomingDamageReduction, 0)
+	-- The next rank carries the perk Ascending to it would grant, so the client can show the payoff.
+	equal(assert(f.Service.EvaluateNextRank(7)).Perk.MaxHealthBonus, 0.08)
+	-- As an Adept, GetPerk returns Adept's perk and the next rank's perk is Vanguard's.
+	f.Records[7].Ascension.RankId = AscensionIds.Adept
+	equal(assert(f.Service.GetPerk(7)).MaxHealthBonus, 0.08)
+	equal(assert(f.Service.EvaluateNextRank(7)).Perk.MaxHealthBonus, 0.20)
+end)
+
+test("GetState surfaces the current rank's display name", function()
+	local f = fixture()
+	local state = assert(f.Service.GetState(7))
+	equal(state.RankId, AscensionIds.Adventurer)
+	equal(state.DisplayName, "Adventurer")
+	f.Records[7].Ascension.RankId = AscensionIds.Vanguard
+	equal(assert(f.Service.GetState(7)).DisplayName, "Vanguard")
+end)
+
+test("EvaluateNextRank targets the next rank in the chain and returns nothing at the top", function()
+	local f = fixture()
+	-- Adventurer -> next is Adept.
+	local fromAdventurer = assert(f.Service.EvaluateNextRank(7))
+	equal(fromAdventurer.RankId, AscensionIds.Adept)
+	equal(fromAdventurer.DisplayName, "Adept")
+	equal(fromAdventurer.Progress.RankId, AscensionIds.Adept)
+	-- Adept -> next is Vanguard.
+	f.Records[7].Ascension.RankId = AscensionIds.Adept
+	local fromAdept = assert(f.Service.EvaluateNextRank(7))
+	equal(fromAdept.RankId, AscensionIds.Vanguard)
+	equal(fromAdept.Progress.RankId, AscensionIds.Vanguard)
+	-- Vanguard is the top: (nil, nil), not an error.
+	f.Records[7].Ascension.RankId = AscensionIds.Vanguard
+	local atTop, atTopReason = f.Service.EvaluateNextRank(7)
+	equal(atTop, nil)
+	equal(atTopReason, nil)
+end)
+
+test("a fully-qualified Adept ascends to Vanguard through the same generic chain", function()
+	local f = fixture()
+	meetAllVanguardRequirements(f)
+	f.Records[7].Ascension.RankId = AscensionIds.Adept
+	local nextRank = assert(f.Service.EvaluateNextRank(7))
+	equal(nextRank.Progress.Met, true)
+	local result = assert(f.Service.Ascend(7, AscensionIds.Vanguard))
+	equal(result.RankId, AscensionIds.Vanguard)
+	equal(f.Records[7].Ascension.RankId, AscensionIds.Vanguard)
+end)
+
+test("Validate rejects a branching rank graph so 'next rank' stays well-defined", function()
+	local branching = {}
+	for id, def in AscensionDefinitions.ById do
+		branching[id] = def
+	end
+	-- Rebuild Vanguard as a plain copy that (wrongly) also chains from Adventurer, giving Adventurer two
+	-- successors (Adept AND Vanguard) -- exactly the branch the chain check must reject.
+	local vanguard = AscensionDefinitions.ById[AscensionIds.Vanguard]
+	local clone = {}
+	for key, value in vanguard do
+		clone[key] = value
+	end
+	clone.PreviousRankId = AscensionIds.Adventurer
+	branching[AscensionIds.Vanguard] = clone
+	local ok, reason = AscensionDefinitions.Validate(branching)
+	equal(ok, false)
+	assert(type(reason) == "string" and reason:find("single chain") ~= nil, "expected a single-chain rejection, got " .. tostring(reason))
+end)
+
 print(("%d Ascension checks passed"):format(passed))

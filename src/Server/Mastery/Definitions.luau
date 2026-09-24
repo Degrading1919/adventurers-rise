@@ -51,7 +51,7 @@ local ALLOWED_EFFECT_TYPES: { [string]: boolean } = {
 	GatheringSpeedBonus = true,
 	PrimaryYieldBonus = true,
 	RareResourceBonus = true,
-	ProcessingSpeedBonus = true,
+	ProcessingEfficiencyBonus = true,
 	MaterialEfficiencyBonus = true,
 	CraftedSaleValueBonus = true,
 }
@@ -121,7 +121,7 @@ local meleeCleave = branch(
 	"Cleave",
 	"Sweeping Strikes",
 	"MeleeCleaveDamageBonus",
-	function(p) return "+" .. p .. " damage against secondary cleave targets (reserved for future multi-target combat)." end,
+	function(p) return p .. " of your hit splashed as damage to nearby enemies." end,
 	MasteryIds.Nodes.MeleeCleave
 )
 
@@ -149,7 +149,7 @@ local defenseResilience = branch(
 	"Resilience",
 	"Steady Recovery",
 	"RecoveryBonus",
-	function(p) return "+" .. p .. " recovery and resistance to disruptive effects (reserved for future status/recovery systems)." end,
+	function(p) return "+" .. p .. " health regeneration over time (scaled by your maximum health)." end,
 	MasteryIds.Nodes.DefenseResilience
 )
 
@@ -177,7 +177,7 @@ local miningProspecting = branch(
 	"Prospecting",
 	"Keen Eye",
 	"RareResourceBonus",
-	function(p) return "+" .. p .. " rare-resource find chance (reserved for future rare Mining resources)." end,
+	function(p) return "Mine raw gems as a rare byproduct (yield scales with mining, up to " .. p .. ")." end,
 	MasteryIds.Nodes.MiningProspecting
 )
 
@@ -186,8 +186,8 @@ local smithingSmelter = branch(
 	MasteryIds.Branches.SmithingSmelter,
 	"Smelter",
 	"Efficient Smelting",
-	"ProcessingSpeedBonus",
-	function(p) return "+" .. p .. " ore-to-bar processing speed." end,
+	"ProcessingEfficiencyBonus",
+	function(p) return "-" .. p .. " materials used when smelting bars (ore and coal)." end,
 	MasteryIds.Nodes.SmithingSmelter
 )
 local smithingForgemaster = branch(
@@ -205,7 +205,7 @@ local smithingMerchantSmith = branch(
 	"Merchant Smith",
 	"Trade Savvy",
 	"CraftedSaleValueBonus",
-	function(p) return "+" .. p .. " NPC sale value of personally forged goods (reserved for future Economy integration)." end,
+	function(p) return "+" .. p .. " shop sale value of goods you forge (bars & equipment)." end,
 	MasteryIds.Nodes.SmithingMerchantSmith
 )
 

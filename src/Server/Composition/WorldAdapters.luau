@@ -11,12 +11,20 @@ export type GatheringNodeResolver = (number, string) -> (any?, string?)
 export type StationDistanceProvider = (number, string) -> (number?, string?)
 export type ForgeDistanceProvider = (number) -> (number?, string?)
 export type ShopDistanceProvider = (number, string) -> (number?, string?)
+-- Resolves the zone the player is physically standing in (nil in open wilderness / not ready), from the
+-- authoritative world position. Discovery uses it so a first-visit reward can never be spoofed.
+export type PlayerZoneResolver = (number) -> (string?, string?)
+-- Runtime ids of OTHER enemies physically near a primary target (within the cleave radius), for Melee
+-- "Cleave" splash damage. Returns an empty list when nothing is nearby; never includes the primary.
+export type CleaveTargetsProvider = (string) -> ({ string }?, string?)
 export type WorldAdapters = {
 	CombatDistanceProvider: CombatDistanceProvider,
 	GatheringNodeResolver: GatheringNodeResolver,
 	StationDistanceProvider: StationDistanceProvider,
 	ForgeDistanceProvider: ForgeDistanceProvider,
 	ShopDistanceProvider: ShopDistanceProvider,
+	PlayerZoneResolver: PlayerZoneResolver,
+	CleaveTargetsProvider: CleaveTargetsProvider,
 }
 
 local WorldAdapters = {}
@@ -47,6 +55,18 @@ end
 
 function WorldAdapters.FailClosedShopDistanceProvider(): ShopDistanceProvider
 	return function(_userId: number, _shopId: string): (number?, string?)
+		return nil, "WorldAdapterNotConfigured"
+	end
+end
+
+function WorldAdapters.FailClosedPlayerZoneResolver(): PlayerZoneResolver
+	return function(_userId: number): (string?, string?)
+		return nil, "WorldAdapterNotConfigured"
+	end
+end
+
+function WorldAdapters.FailClosedCleaveTargetsProvider(): CleaveTargetsProvider
+	return function(_primaryRuntimeId: string): ({ string }?, string?)
 		return nil, "WorldAdapterNotConfigured"
 	end
 end

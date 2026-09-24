@@ -6,11 +6,14 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
+local CollectionService = game:GetService("CollectionService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local SkillIds = require(Shared:WaitForChild("SkillIds"))
 local EquipmentSlots = require(Shared:WaitForChild("EquipmentSlots"))
 local ItemDefinitions = require(Shared:WaitForChild("ItemDefinitions"))
+local RegionDefinitions = require(Shared:WaitForChild("RegionDefinitions"))
+local SoundController = require(script.Parent:WaitForChild("SoundController"))
 
 -- Presentation-only labels (the client owns presentation; stable IDs stay authoritative).
 local SKILL_LABELS: { [string]: string } = {
@@ -24,10 +27,21 @@ local ITEM_LABELS: { [string]: string } = {
 	item_iron_ore = "Iron Ore",
 	item_iron_bar = "Iron Bar",
 	item_chieftain_fang = "Goblin Chieftain Fang",
+	item_warlord_seal = "Bandit Warlord Seal",
 	weapon_sword_starter = "Starter Sword",
 	weapon_sword_upgraded = "Upgraded Sword",
 	tool_pickaxe_basic = "Basic Pickaxe",
 	tool_pickaxe_upgraded = "Upgraded Pickaxe",
+	armor_iron_helm = "Iron Helm",
+	armor_iron_body = "Iron Chestplate",
+	armor_iron_legs = "Iron Greaves",
+	item_coal = "Coal",
+	item_steel_bar = "Steel Bar",
+	item_raw_gem = "Raw Gem",
+	weapon_sword_steel = "Steel Sword",
+	armor_steel_helm = "Steel Helm",
+	armor_steel_body = "Steel Chestplate",
+	armor_steel_legs = "Steel Greaves",
 }
 local function itemLabel(id: string): string
 	return ITEM_LABELS[id] or id
@@ -36,6 +50,7 @@ end
 -- resource. The item IDs and their authority stay server-owned; this only changes how they look.
 local RARE_ITEMS: { [string]: boolean } = {
 	item_chieftain_fang = true,
+	item_warlord_seal = true,
 }
 
 local COLORS = {
@@ -89,7 +104,7 @@ function Interface.New(player: Player)
 		Upgrade = function() end,
 		ForgeCraft = function(_recipeId: string, _request: { Quantity: number?, Max: boolean? }?) end,
 		Equip = function(_slotId: string, _instanceId: string) end,
-		Ascend = function() end,
+		Ascend = function(_rankId: string) end,
 		AcknowledgeStarterFocus = function() end,
 		SetOfflineFocus = function(_skillId: string) end,
 		SelectMastery = function(_skillId: string, _nodeId: string) end,
@@ -227,7 +242,7 @@ function Interface.New(player: Player)
 	end
 
 	-- Presentation-only boss labels; stable IDs stay authoritative.
-	local BOSS_LABELS: { [string]: string } = { enemy_goblin_chieftain = "Goblin Chieftain" }
+	local BOSS_LABELS: { [string]: string } = { enemy_goblin_chieftain = "Goblin Chieftain", enemy_bandit_warlord = "Bandit Warlord" }
 	local function bossLabel(id: any): string
 		return (type(id) == "string" and BOSS_LABELS[id]) or "the boss"
 	end
@@ -349,8 +364,9 @@ function Interface.New(player: Player)
 
 	local forgePanel, forgeContent = panel("Forge — Smithing", 360)
 	local gearPanel, gearContent = panel("Gear — Inventory")
-	local ascendPanel, ascendContent = panel("Ascension — Adept")
+	local ascendPanel, ascendContent = panel("Ascension")
 	local offlinePanel, offlineContent = panel("Offline Training")
+	local mapPanel, mapContent = panel("Map — The Borderlands", 340)
 	local shopPanel, shopContent = panel("Shop", 340)
 	local masteryPanel, masteryContent = panel("Skills — Mastery", 430)
 	local skillsPanel, skillsContent = panel("Skills — Progress", 320)
@@ -365,6 +381,7 @@ function Interface.New(player: Player)
 		gearPanel.Visible = false
 		ascendPanel.Visible = false
 		offlinePanel.Visible = false
+		mapPanel.Visible = false
 		shopPanel.Visible = false
 		masteryPanel.Visible = false
 		skillsPanel.Visible = false
@@ -458,10 +475,21 @@ function Interface.New(player: Player)
 			local recipeId = recipe.RecipeId
 			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 74), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, forgeList)
 			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			-- Tell the player what the craft is FOR: armour outputs show their mitigation, weapons their
+			-- damage, so the ladder (iron -> steel) reads as a real upgrade on the recipe list itself.
+			local outDef = ItemDefinitions.ById[recipe.OutputItemId]
+			local outStat = ""
+			if outDef then
+				if outDef.Armor then
+					outStat = ("   ·  %d%% armour"):format(math.floor(outDef.Armor.DamageReduction * 100 + 0.5))
+				elseif outDef.Melee then
+					outStat = ("   ·  %d dmg"):format(outDef.Melee.Damage)
+				end
+			end
 			make("TextLabel", {
 				Size = UDim2.new(1, -12, 0, 18), Position = UDim2.new(0, 8, 0, 5), BackgroundTransparency = 1,
 				Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-				Text = ("%s   (Smith Lv %d)"):format(itemLabel(recipe.OutputItemId), recipe.RequiredSmithingLevel),
+				Text = ("%s   (Smith Lv %d)%s"):format(itemLabel(recipe.OutputItemId), recipe.RequiredSmithingLevel, outStat),
 			}, row)
 			-- Authoritative input requirements, straight from the read model.
 			local inputParts = {}
@@ -487,7 +515,13 @@ function Interface.New(player: Player)
 	}, gearContent)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, gearList)
 
-	local SLOT_LABELS: { [string]: string } = { [EquipmentSlots.Weapon] = "Weapon", [EquipmentSlots.Tool] = "Tool" }
+	local SLOT_LABELS: { [string]: string } = {
+		[EquipmentSlots.Weapon] = "Weapon",
+		[EquipmentSlots.Tool] = "Tool",
+		[EquipmentSlots.Head] = "Head",
+		[EquipmentSlots.Body] = "Body",
+		[EquipmentSlots.Legs] = "Legs",
+	}
 	local function gearHeader(text: string, order2: number)
 		make("TextLabel", {
 			Size = UDim2.new(1, -6, 0, 18), BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 12,
@@ -515,6 +549,23 @@ function Interface.New(player: Player)
 		local order2 = 0
 
 		gearHeader("EQUIPMENT", order2); order2 += 1
+		-- Make the Defense/armour reward legible: the authoritative mitigation the server applies (Mastery
+		-- + equipped armour), plus the armour-only share, as plain percentages. Without this the player
+		-- crafts a full set and sees no number anywhere.
+		local defense = lastState.Defense
+		if type(defense) == "table" then
+			local totalPct = math.floor((tonumber(defense.DamageReduction) or 0) * 100 + 0.5)
+			local armorPct = math.floor((tonumber(defense.ArmorDamageReduction) or 0) * 100 + 0.5)
+			local defenseText = if armorPct > 0
+				then ("Damage reduction: %d%%   (armour %d%%)"):format(totalPct, armorPct)
+				else ("Damage reduction: %d%%"):format(totalPct)
+			make("TextLabel", {
+				Size = UDim2.new(1, -6, 0, 22), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 13,
+				TextColor3 = if totalPct > 0 then COLORS.Accent else COLORS.Dim, TextXAlignment = Enum.TextXAlignment.Left,
+				Text = defenseText, LayoutOrder = order2,
+			}, gearList)
+			order2 += 1
+		end
 		local equippable: { { InstanceId: string, DefinitionId: string, SlotId: string } } = {}
 		for instanceId, item in items do
 			local def = ItemDefinitions.ById[item.DefinitionId]
@@ -533,10 +584,21 @@ function Interface.New(player: Player)
 			local isEquipped = type(slotEquipped) == "table" and slotEquipped.InstanceId == entry.InstanceId
 			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 36), BackgroundColor3 = COLORS.PanelAlt, LayoutOrder = order2 }, gearList)
 			make("UICorner", { CornerRadius = UDim.new(0, 6) }, row)
+			-- Show the piece's own contribution so the ladder is self-explanatory: armour pieces read their
+			-- DamageReduction, weapons their attack damage. Presentation only; ItemDefinitions is already local.
+			local entryDef = ItemDefinitions.ById[entry.DefinitionId]
+			local statSuffix = ""
+			if entryDef then
+				if entryDef.Armor then
+					statSuffix = ("  ·  %d%% armour"):format(math.floor(entryDef.Armor.DamageReduction * 100 + 0.5))
+				elseif entryDef.Melee then
+					statSuffix = ("  ·  %d dmg"):format(entryDef.Melee.Damage)
+				end
+			end
 			make("TextLabel", {
 				Size = UDim2.new(1, -96, 1, 0), Position = UDim2.new(0, 8, 0, 0), BackgroundTransparency = 1,
 				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = COLORS.Text, TextXAlignment = Enum.TextXAlignment.Left,
-				Text = ("%s  (%s)"):format(itemLabel(entry.DefinitionId), SLOT_LABELS[entry.SlotId] or entry.SlotId),
+				Text = ("%s  (%s)%s"):format(itemLabel(entry.DefinitionId), SLOT_LABELS[entry.SlotId] or entry.SlotId, statSuffix),
 			}, row)
 			local act = make("TextButton", {
 				Size = UDim2.new(0, 84, 0, 28), Position = UDim2.new(1, -88, 0.5, 0), AnchorPoint = Vector2.new(0, 0.5),
@@ -599,12 +661,23 @@ function Interface.New(player: Player)
 	-- ---- Ascend panel ----
 	local ascendList = make("Frame", { Size = UDim2.new(1, 0, 1, -46), BackgroundTransparency = 1 }, ascendContent)
 	make("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, ascendList)
-	local ascendActionBtn = make("TextButton", {
+	-- Readable names for the boss-milestone requirement, keyed by the ProgressionFlag id the server
+		-- reports; generalised so each rank can require a different boss without a code change.
+		local MILESTONE_LABELS: { [string]: string } = {
+			flag_boss_goblin_chieftain_defeated = "Goblin Chieftain defeated",
+			flag_boss_bandit_warlord_defeated = "Bandit Warlord defeated",
+		}
+		-- The rank the Ascend button currently targets (the player's next rank), refreshed by renderAscend
+		-- so a click always ascends toward the right rank without the client hardcoding one.
+		local ascendTargetRankId: string? = nil
+		local ascendActionBtn = make("TextButton", {
 		Size = UDim2.new(1, 0, 0, 38), Position = UDim2.new(0, 0, 1, -38), BackgroundColor3 = COLORS.Button,
-		Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = COLORS.Text, Text = "Ascend to Adept",
+		Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = COLORS.Text, Text = "Ascend",
 	}, ascendContent)
 	make("UICorner", { CornerRadius = UDim.new(0, 6) }, ascendActionBtn)
-	ascendActionBtn.Activated:Connect(function() handlers.Ascend() end)
+	ascendActionBtn.Activated:Connect(function()
+		if ascendTargetRankId then handlers.Ascend(ascendTargetRankId) end
+	end)
 
 	local function reqLine(text: string, met: boolean, order2: number)
 		make("TextLabel", {
@@ -614,15 +687,48 @@ function Interface.New(player: Player)
 		}, ascendList)
 	end
 
+	-- Formats an Ascension perk (a rank's permanent reward) into a short readable string, or nil if it
+	-- grants nothing measurable.
+	local function perkText(perkValue: any): string?
+		if type(perkValue) ~= "table" then
+			return nil
+		end
+		local parts = {}
+		local hp = tonumber(perkValue.MaxHealthBonus) or 0
+		local dr = tonumber(perkValue.IncomingDamageReduction) or 0
+		if hp > 0 then
+			table.insert(parts, ("+%d%% Max HP"):format(math.floor(hp * 100 + 0.5)))
+		end
+		if dr > 0 then
+			table.insert(parts, ("+%d%% damage reduction"):format(math.floor(dr * 100 + 0.5)))
+		end
+		if #parts == 0 then
+			return nil
+		end
+		return table.concat(parts, ", ")
+	end
+	local function ascendInfo(text: string, color: Color3, order2: number)
+		make("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 13,
+			TextColor3 = color, TextXAlignment = Enum.TextXAlignment.Left, Text = text, LayoutOrder = order2,
+		}, ascendList)
+	end
+
 	local function renderAscend()
 		for _, child in ascendList:GetChildren() do
 			if child:IsA("TextLabel") then child:Destroy() end
 		end
 		if not lastState or not lastState.Ascension then return end
-		local rankId = lastState.Ascension.RankId
-		local p = lastState.Ascension.AdeptProgress
+		local asc = lastState.Ascension
+		local nextRank = asc.NextRank
+			local p = if type(nextRank) == "table" then nextRank.Progress else nil
 		local order2 = 0
 		if p then
+			ascendInfo(("%s  ▶  %s"):format(tostring(asc.RankDisplayName or "—"), tostring(nextRank.DisplayName)), COLORS.Text, order2); order2 += 1
+			local grantText = perkText(nextRank.Perk)
+			if grantText then
+				ascendInfo("Ascending grants: " .. grantText, COLORS.Good, order2); order2 += 1
+			end
 			for _, alt in p.Offense.Alternatives do
 				reqLine(("Offense: %s %d/%d"):format(SKILL_LABELS[alt.SkillId] or alt.SkillId, alt.CurrentLevel, alt.RequiredLevel), alt.Met, order2)
 				order2 += 1
@@ -632,11 +738,19 @@ function Interface.New(player: Player)
 				reqLine(("%s %d/%d"):format(SKILL_LABELS[th.SkillId] or th.SkillId, th.CurrentLevel, th.RequiredLevel), th.Met, order2)
 				order2 += 1
 			end
-			reqLine("Goblin Chieftain defeated", p.BossMilestone.Met, order2); order2 += 1
+			reqLine(MILESTONE_LABELS[p.BossMilestone.MilestoneId] or "Boss milestone", p.BossMilestone.Met, order2); order2 += 1
 		end
-		local alreadyAdept = rankId ~= nil and rankId ~= "ascension_adventurer"
-		local canAscend = (not alreadyAdept) and p ~= nil and p.Met == true
-		ascendActionBtn.Text = if alreadyAdept then "Rank: Adept" else (if canAscend then "Ascend to Adept" else "Requirements not met")
+		if not p then
+			-- Top of the ladder: no next rank -- show the rank held and the perk it grants.
+			ascendInfo(("Highest rank: %s"):format(tostring(asc.RankDisplayName or "—")), COLORS.Text, order2); order2 += 1
+			local held = perkText(asc.RankPerk)
+			if held then
+				ascendInfo("Rank perk: " .. held, COLORS.Good, order2); order2 += 1
+			end
+		end
+		ascendTargetRankId = if type(nextRank) == "table" then nextRank.RankId else nil
+		local canAscend = p ~= nil and p.Met == true
+		ascendActionBtn.Text = if type(nextRank) ~= "table" then ("Rank: " .. (asc.RankDisplayName or "—") .. " (max)") elseif canAscend then ("Ascend to " .. nextRank.DisplayName) else "Requirements not met"
 		ascendActionBtn.BackgroundColor3 = if canAscend then COLORS.ButtonOn else COLORS.Button
 		ascendActionBtn.Active = canAscend
 		ascendActionBtn.AutoButtonColor = canAscend
@@ -1013,6 +1127,7 @@ function Interface.New(player: Player)
 	-- Renders a sanitized boss personal-reward push (see Composition/PlayerEvents) as a temporary toast.
 	-- Pure presentation of server-authoritative data; the client never grants anything from this.
 	function iface.ShowBossReward(payload: any)
+		SoundController.Play("BossReward")
 		if type(payload) ~= "table" then
 			return
 		end
@@ -1051,19 +1166,85 @@ function Interface.New(player: Player)
 	local STARTER_FOCUS_STEP_ID = "onboarding_starter_focus"
 	local lastObjectiveStepId: string? = nil
 	local starterAutoOpened = false
+	-- Whether the objective banner is currently showing an onboarding step or the post-onboarding
+	-- Ascension goal, so a tap routes to the right place.
+	local objectiveMode: string = "onboarding"
+	-- Where each boss-milestone requirement is earned, so the next-rank goal can name a PLACE to go.
+	local MILESTONE_INFO: { [string]: { Boss: string, Zone: string } } = {
+		flag_boss_goblin_chieftain_defeated = { Boss = "Goblin Chieftain", Zone = "the Goblin Warren" },
+		flag_boss_bandit_warlord_defeated = { Boss = "Bandit Warlord", Zone = "the Ashen Ruins" },
+	}
+	-- After onboarding, the objective banner becomes a live "next Ascension rank" goal: it names the rank
+	-- and the single most salient unmet requirement (boss first -- it's a landmark + a place -- then the
+	-- skill gates), so the player always has a concrete reason and direction. Nil at the top of the ladder.
+	local function nextRankGoal(ascension: any): ({ Title: string, Hint: string })?
+		if type(ascension) ~= "table" then
+			return nil
+		end
+		if type(ascension.NextRank) ~= "table" then
+			-- Top of the ladder: keep a forward-looking goal so the endgame never dead-ends into a blank
+			-- banner. There is always more to master, and new regions are on the roadmap.
+			return {
+				Title = ("Highest rank: %s"):format(tostring(ascension.RankDisplayName or "—")),
+				Hint = "Master every skill tree and gear tier — new frontiers are on the way.",
+			}
+		end
+		local nextRank = ascension.NextRank
+		local p = nextRank.Progress
+		if type(p) ~= "table" then
+			return nil
+		end
+		local hint: string? = nil
+		if type(p.BossMilestone) == "table" and p.BossMilestone.Met ~= true then
+			local info = MILESTONE_INFO[p.BossMilestone.MilestoneId]
+			hint = if info then ("Defeat the %s in %s"):format(info.Boss, info.Zone) else "Defeat the region boss"
+		end
+		if not hint and type(p.Offense) == "table" and p.Offense.Met ~= true and type(p.Offense.Alternatives) == "table" then
+			local alt = p.Offense.Alternatives[1]
+			if alt then
+				hint = ("Train %s to Level %d (%d/%d)"):format(SKILL_LABELS[alt.SkillId] or alt.SkillId, alt.RequiredLevel, alt.CurrentLevel, alt.RequiredLevel)
+			end
+		end
+		if not hint and type(p.Defense) == "table" and p.Defense.Met ~= true then
+			hint = ("Train Defense to Level %d (%d/%d)"):format(p.Defense.RequiredLevel, p.Defense.CurrentLevel, p.Defense.RequiredLevel)
+		end
+		if not hint and type(p.OverallSkilling) == "table" and p.OverallSkilling.Met ~= true and type(p.OverallSkilling.Thresholds) == "table" then
+			for _, th in p.OverallSkilling.Thresholds do
+				if th.Met ~= true then
+					hint = ("Train %s to Level %d (%d/%d)"):format(SKILL_LABELS[th.SkillId] or th.SkillId, th.RequiredLevel, th.CurrentLevel, th.RequiredLevel)
+					break
+				end
+			end
+		end
+		if not hint then
+			hint = ("All set — open Menu → Ascend to become %s!"):format(tostring(nextRank.DisplayName))
+		end
+		return { Title = ("Next rank: %s"):format(tostring(nextRank.DisplayName)), Hint = hint }
+	end
 	local function renderObjective(state: any)
 		local ob = state.Onboarding
 		if type(ob) ~= "table" then
 			return
 		end
 		if ob.Complete == true then
-			objective.Visible = false
 			if lastObjectiveStepId ~= nil and lastObjectiveStepId ~= "__complete__" then
 				showToast("You're now an Adept — your guided journey is complete!", COLORS.Good)
 			end
 			lastObjectiveStepId = "__complete__"
+			-- Onboarding done: the objective banner becomes the live "next Ascension rank" goal, routing
+			-- the player toward the next rank (and the boss/skills it needs). Nil only at the top rank.
+			local goal = nextRankGoal(state.Ascension)
+			if goal then
+				objectiveMode = "ascension"
+				objective.Visible = not bossActive
+				objectiveTitle.Text = goal.Title
+				objectiveHint.Text = goal.Hint
+			else
+				objective.Visible = false
+			end
 			return
 		end
+		objectiveMode = "onboarding"
 		-- Yields to the boss bar so the two top-center surfaces never compete for attention.
 		objective.Visible = not bossActive
 		local progressText = ""
@@ -1079,13 +1260,19 @@ function Interface.New(player: Player)
 			starterPanel.Visible = true
 		end
 		if lastObjectiveStepId ~= nil and lastObjectiveStepId ~= "__complete__" and lastObjectiveStepId ~= ob.StepId then
+			SoundController.Play("Objective")
 			showToast(("Objective complete!\nNext: %s"):format(tostring(ob.Title)), COLORS.Good)
 		end
 		lastObjectiveStepId = ob.StepId
 	end
-	-- Tapping the objective on the starter-focus step reopens its framing panel.
+	-- Tapping the objective routes the player: on the starter-focus step it reopens that framing panel;
+	-- once it is the post-onboarding Ascension goal, it opens the Ascend panel (the full requirement list).
 	objective.Activated:Connect(function()
-		if lastObjectiveStepId == STARTER_FOCUS_STEP_ID then
+		if objectiveMode == "ascension" then
+			hideAllPanels()
+			renderAscend()
+			ascendPanel.Visible = true
+		elseif lastObjectiveStepId == STARTER_FOCUS_STEP_ID then
 			hideAllPanels()
 			starterPanel.Visible = true
 		end
@@ -1171,6 +1358,7 @@ function Interface.New(player: Player)
 						pointsDelta = newM.EarnedPoints - oldM.EarnedPoints
 					end
 					local extra = if pointsDelta == 1 then "   ·   +1 Mastery Point" elseif pointsDelta > 1 then ("   ·   +%d Mastery Points"):format(pointsDelta) else ""
+					SoundController.Play("LevelUp")
 					showToast(("%s reached Level %d!%s"):format(SKILL_LABELS[skillId], newS.Level, extra), COLORS.Good)
 				end
 			end
@@ -1272,8 +1460,24 @@ function Interface.New(player: Player)
 			return
 		end
 		if ctx.NearNode == true then
-			local node = if lastState and type(lastState.GatheringNodes) == "table" then lastState.GatheringNodes[1] else nil
-			local name = if node then node.DisplayName else "Iron Ore"
+			-- Show the node the player is ACTUALLY standing at (ctx.NearNodeId), not GatheringNodes[1] --
+			-- with both Iron and Coal defined, [1] is whichever sorts first, so it mislabelled the panel.
+			local nodes = if lastState and type(lastState.GatheringNodes) == "table" then lastState.GatheringNodes else nil
+			local node = nil
+			if nodes then
+				if type(ctx.NearNodeId) == "string" then
+					for _, candidate in nodes do
+						if candidate.NodeId == ctx.NearNodeId then
+							node = candidate
+							break
+						end
+					end
+				end
+				if node == nil then
+					node = nodes[1]
+				end
+			end
+			local name = if node then node.DisplayName else "Resource"
 			local reqLevel = if node then node.RequiredMiningLevel else 1
 			contextTitle.Text = ("%s  —  Mining Lv %s"):format(tostring(name), tostring(reqLevel))
 			local tool = lastState and lastState.Equipment and lastState.Equipment[EquipmentSlots.Tool]
@@ -1414,6 +1618,136 @@ function Interface.New(player: Player)
 	make("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8), PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, menuFrame)
 	make("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, menuFrame)
 
+	-- ---- Map panel ----
+	-- A schematic top-down map of Region I: each zone plotted by its world centre (RegionDefinitions),
+	-- discovered vs unknown from the read-model Discovery set, with a live player marker. Client-only
+	-- presentation over data the server already owns.
+	local mapArea = make("Frame", {
+		Size = UDim2.new(1, 0, 1, -6), Position = UDim2.new(0, 0, 0, 3), BackgroundColor3 = COLORS.PanelAlt,
+		ClipsDescendants = true,
+	}, mapContent)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, mapArea)
+	-- Difficulty hue by zone tier (safe -> deadly), so the map reads as a gradient outward from town.
+	local TIER_COLORS: { [number]: Color3 } = {
+		[1] = Color3.fromRGB(120, 200, 130),
+		[2] = Color3.fromRGB(210, 200, 110),
+		[3] = Color3.fromRGB(220, 150, 90),
+		[4] = Color3.fromRGB(220, 110, 100),
+	}
+	-- Plotted world half-extent (studs); covers every zone centre with a margin.
+	local MAP_WORLD_EXTENT = 380
+	local function worldToMapScale(x: number, z: number): (number, number)
+		-- East (+x) -> right; North (+z) -> up. Clamped so a far-flung marker stays on the map.
+		local u = math.clamp((x + MAP_WORLD_EXTENT) / (2 * MAP_WORLD_EXTENT), 0.04, 0.96)
+		local v = math.clamp((MAP_WORLD_EXTENT - z) / (2 * MAP_WORLD_EXTENT), 0.06, 0.94)
+		return u, v
+	end
+	-- Persistent player marker (repositioned live by UpdateMapMarker), above the zone dots.
+	local playerDot = make("Frame", {
+		Size = UDim2.new(0, 12, 0, 12), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = COLORS.Accent,
+		BorderSizePixel = 0, ZIndex = 6, Visible = false,
+	}, mapArea)
+	make("UICorner", { CornerRadius = UDim.new(1, 0) }, playerDot)
+	make("UIStroke", { Color = COLORS.Text, Thickness = 1.5 }, playerDot)
+
+	-- The boss whose milestone gates the player's NEXT rank tells the map which zone to flag as the
+	-- current goal; boss arenas are plotted so that goal has a visible place. Keyed by the stable ids the
+	-- read model / territory markers report.
+	local MAP_MILESTONE_ZONE: { [string]: string } = {
+		flag_boss_goblin_chieftain_defeated = "zone_goblin_warren",
+		flag_boss_bandit_warlord_defeated = "zone_ashen_ruins",
+	}
+	local MAP_BOSS_LABELS: { [string]: string } = {
+		enemy_goblin_chieftain = "Goblin Chieftain",
+		enemy_bandit_warlord = "Bandit Warlord",
+	}
+	local function renderMap()
+		for _, child in mapArea:GetChildren() do
+			if child ~= playerDot and (child:IsA("Frame") or child:IsA("TextLabel")) then
+				child:Destroy()
+			end
+		end
+		local discovered = (lastState and lastState.Discovery and lastState.Discovery.DiscoveredZoneIds) or {}
+		-- Which zone is the current objective: the one holding the boss the player's next rank still needs.
+		local objectiveZoneId: string? = nil
+		local nextRank = lastState and lastState.Ascension and lastState.Ascension.NextRank
+		if type(nextRank) == "table" and type(nextRank.Progress) == "table" then
+			local milestone = nextRank.Progress.BossMilestone
+			if type(milestone) == "table" and milestone.Met ~= true then
+				objectiveZoneId = MAP_MILESTONE_ZONE[milestone.MilestoneId]
+			end
+		end
+		for i, zone in RegionDefinitions.Zones do
+			local u, v = worldToMapScale(zone.CenterX, zone.CenterZ)
+			local known = zone.Safe == true or discovered[zone.Id] == true
+			local isObjective = zone.Id == objectiveZoneId
+			-- Highlight ring behind the current-objective zone so the player sees WHERE to go next.
+			if isObjective then
+				local ring = make("Frame", {
+					Size = UDim2.new(0, 30, 0, 30), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
+					BackgroundColor3 = COLORS.Good, BackgroundTransparency = 0.75, BorderSizePixel = 0, ZIndex = 2,
+				}, mapArea)
+				make("UICorner", { CornerRadius = UDim.new(1, 0) }, ring)
+				make("UIStroke", { Color = COLORS.Good, Thickness = 1.5, Transparency = 0.1 }, ring)
+			end
+			local dot = make("Frame", {
+				Size = UDim2.new(0, 14, 0, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
+				BackgroundColor3 = if known then (TIER_COLORS[zone.Tier] or COLORS.Accent) else COLORS.Dim,
+				BorderSizePixel = 0, ZIndex = 3,
+			}, mapArea)
+			make("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+			-- Stagger labels vertically by index so neighbouring zones (e.g. the eastern Meadow + Warren,
+			-- which sit close together) don't overprint each other.
+			local labelYOffset = 10 + (i % 2) * 16
+			-- Anchor labels toward the interior near the panel edges so long names don't clip.
+			local ax = if u > 0.72 then 1 elseif u < 0.28 then 0 else 0.5
+			local ox = if ax == 1 then -6 elseif ax == 0 then 6 else 0
+			make("TextLabel", {
+				Size = UDim2.new(0, 118, 0, 14), AnchorPoint = Vector2.new(ax, 0), Position = UDim2.new(u, ox, v, labelYOffset),
+				TextXAlignment = if ax == 1 then Enum.TextXAlignment.Right elseif ax == 0 then Enum.TextXAlignment.Left else Enum.TextXAlignment.Center,
+				BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
+				TextColor3 = if isObjective then COLORS.Good elseif known then COLORS.Text else COLORS.Dim,
+				Text = if isObjective then ("▶ " .. zone.DisplayName) elseif known then zone.DisplayName else "???",
+				ZIndex = 4,
+			}, mapArea)
+		end
+
+		-- Plot the boss arenas (from their placed territory markers) as red diamonds, so the map shows the
+		-- landmark goals -- and, with the objective ring above, exactly which boss the next rank needs.
+		for _, marker in CollectionService:GetTagged("AR_EnemyTerritory") do
+			if marker:IsA("BasePart") then
+				local definitionId = marker:GetAttribute("EnemyDefinitionId")
+				local label = if type(definitionId) == "string" then MAP_BOSS_LABELS[definitionId] else nil
+				if label then
+					local u, v = worldToMapScale(marker.Position.X, marker.Position.Z)
+					local diamond = make("Frame", {
+						Size = UDim2.new(0, 12, 0, 12), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(u, 0, v, 0),
+						BackgroundColor3 = Color3.fromRGB(214, 74, 74), BorderSizePixel = 0, Rotation = 45, ZIndex = 5,
+					}, mapArea)
+					make("UIStroke", { Color = COLORS.Text, Thickness = 1 }, diamond)
+					local bax = if u > 0.72 then 1 elseif u < 0.28 then 0 else 0.5
+					local box = if bax == 1 then -6 elseif bax == 0 then 6 else 0
+					make("TextLabel", {
+						Size = UDim2.new(0, 118, 0, 12), AnchorPoint = Vector2.new(bax, 1), Position = UDim2.new(u, box, v, -10),
+						TextXAlignment = if bax == 1 then Enum.TextXAlignment.Right elseif bax == 0 then Enum.TextXAlignment.Left else Enum.TextXAlignment.Center,
+						BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10,
+						TextColor3 = Color3.fromRGB(235, 150, 150), Text = label, ZIndex = 5,
+					}, mapArea)
+				end
+			end
+		end
+	end
+
+	-- Live player marker, driven cheaply from the Controller's proximity loop (only moves a frame).
+	function iface.UpdateMapMarker(x: number, z: number)
+		if not mapPanel.Visible then
+			return
+		end
+		local u, v = worldToMapScale(x, z)
+		playerDot.Position = UDim2.new(u, 0, v, 0)
+		playerDot.Visible = true
+	end
+
 	local function menuEntry(text: string, order2: number, open: () -> ()): TextButton
 		local b = make("TextButton", {
 			Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = COLORS.Button, AutoButtonColor = true,
@@ -1432,6 +1766,7 @@ function Interface.New(player: Player)
 	local skillsMenuEntry = menuEntry("Skills", 2, function() renderSkills(); skillsPanel.Visible = true end)
 	menuEntry("Ascend", 3, function() renderAscend(); ascendPanel.Visible = true end)
 	menuEntry("Offline", 4, function() renderOffline(); offlinePanel.Visible = true end)
+	menuEntry("Map", 5, function() renderMap(); mapPanel.Visible = true end)
 
 	menuBtn.Activated:Connect(function()
 		if menuFrame.Visible then
@@ -1456,6 +1791,68 @@ function Interface.New(player: Player)
 			menuBtn.BackgroundColor3 = COLORS.Button
 			skillsMenuEntry.Text = "Skills"
 			skillsMenuEntry.BackgroundColor3 = COLORS.Button
+		end
+	end
+
+	-- ===== Region-entry banner (open-world zone announcements) =====
+	-- A large, briefly-shown title + blurb when the player enters a named zone, so the world reads as
+	-- distinct places. Presentation only; the Controller drives it from RegionDefinitions.ZoneAt.
+	local TweenService = game:GetService("TweenService")
+	local regionBanner = make("Frame", {
+		Size = UDim2.new(1, -40, 0, 82), Position = UDim2.new(0.5, 0, 0.22, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundColor3 = Color3.fromRGB(12, 14, 20), BackgroundTransparency = 1, Visible = false,
+	}, screen)
+	make("UICorner", { CornerRadius = UDim.new(0, 10) }, regionBanner)
+	make("UIStroke", { Color = COLORS.Accent, Thickness = 1.5, Transparency = 1 }, regionBanner)
+	capSize(regionBanner, 560)
+	local regionTitle = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1, Font = Enum.Font.GothamBlack, TextSize = 36,
+		TextColor3 = COLORS.Text, TextTransparency = 1, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 1, Text = "",
+	}, regionBanner)
+	local regionBlurb = make("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 22), Position = UDim2.new(0, 0, 0, 50), BackgroundTransparency = 1, Font = Enum.Font.GothamMedium,
+		TextSize = 15, TextColor3 = COLORS.Dim, TextTransparency = 1, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 1,
+		TextWrapped = true, Text = "",
+	}, regionBanner)
+	local bannerToken = 0
+	function iface.ShowRegionBanner(displayName: any, blurb: any)
+		SoundController.Play("Banner")
+		bannerToken += 1
+		local myToken = bannerToken
+		regionTitle.Text = tostring(displayName)
+		regionBlurb.Text = tostring(blurb or "")
+		regionBanner.Visible = true
+		local stroke = regionBanner:FindFirstChildOfClass("UIStroke")
+		local tin = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		TweenService:Create(regionBanner, tin, { BackgroundTransparency = 0.28 }):Play()
+		if stroke then TweenService:Create(stroke, tin, { Transparency = 0.35 }):Play() end
+		TweenService:Create(regionTitle, tin, { TextTransparency = 0, TextStrokeTransparency = 0.2 }):Play()
+		TweenService:Create(regionBlurb, tin, { TextTransparency = 0.05, TextStrokeTransparency = 0.4 }):Play()
+		task.delay(2.8, function()
+			if myToken ~= bannerToken then return end
+			local tout = TweenInfo.new(0.7, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			TweenService:Create(regionBanner, tout, { BackgroundTransparency = 1 }):Play()
+			if stroke then TweenService:Create(stroke, tout, { Transparency = 1 }):Play() end
+			TweenService:Create(regionTitle, tout, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+			TweenService:Create(regionBlurb, tout, { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+			task.delay(0.75, function()
+				if myToken == bannerToken then
+					regionBanner.Visible = false
+				end
+			end)
+		end)
+	end
+
+	-- First-visit discovery reward feedback (server-authoritative outcome), shown as a toast alongside
+	-- the region-entry banner so exploration feels rewarded.
+	function iface.ShowDiscovery(zoneName: any, rewardGold: any)
+		SoundController.Play("Discovery")
+		local name = if type(zoneName) == "string" and zoneName ~= "" then zoneName else "a new area"
+		local gold = if type(rewardGold) == "number" then rewardGold else 0
+		if gold > 0 then
+			showToast(("Discovered %s!\n+%d Gold"):format(name, gold), COLORS.Good)
+		else
+			showToast(("Discovered %s!"):format(name), COLORS.Good)
 		end
 	end
 
